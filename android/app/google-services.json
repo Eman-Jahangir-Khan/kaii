@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "783701586694",
+    "project_id": "kaii-eb78c",
+    "storage_bucket": "kaii-eb78c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:783701586694:android:d8d52064bb655dd9f4a487",
+        "android_client_info": {
+          "package_name": "com.example.kaii"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "783701586694-pkpjsrunpl32gvvagf4gebegdujl66vk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.kaii",
+            "certificate_hash": "183f3e36da01d026f97b94e27176f2f96f830f81"
+          }
+        },
+        {
+          "client_id": "783701586694-7ioralclgold028ot6kgjff0i8sc5e7s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCLzmB8M1KwM0eB_pFggwsftMJlKk-LqYo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "783701586694-7ioralclgold028ot6kgjff0i8sc5e7s.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "783701586694-fn5cu3qi961n2ckjp1fjv302sebq6j7i.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.kaii"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

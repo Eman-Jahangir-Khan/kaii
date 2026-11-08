@@ -1,0 +1,249 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import '../auth_repository.dart';
+import '../chat_repository.dart';
+import '../theme.dart';
+import '../widgets.dart';
+
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final User? _user = FirebaseAuth.instance.currentUser;
+  late final String _uid = _user?.uid ?? '';
+  late final Future<Map<String, dynamic>?> _future = chatRepo.getUser(_uid);
+
+  Future<void> _confirmLogout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cream,
+        title: const Text(
+          'Log out?',
+          style: TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: const Text(
+          'You will need to sign in again.',
+          style: TextStyle(color: AppColors.brown700),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.brown700),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Log out',
+              style: TextStyle(
+                color: AppColors.gold700,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) authRepo.logout();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final email = _user?.email ?? '';
+
+    return Scaffold(
+      backgroundColor: AppColors.cream,
+      body: Column(
+        children: [
+          const GradientHeader(title: 'Profile'),
+          Expanded(
+            child: FutureBuilder<Map<String, dynamic>?>(
+              future: _future,
+              initialData: chatRepo.cachedUser(_uid),
+              builder: (context, snap) {
+                final data = snap.data;
+                final loading =
+                    snap.connectionState != ConnectionState.done &&
+                        data == null;
+                final username = (data?['username'] as String?) ?? '';
+                final name = (data?['name'] as String?) ?? '';
+                final photo = (data?['photoUrl'] as String?) ?? '';
+                final shownName = name.isNotEmpty ? name : username;
+
+                return ListView(
+                  padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+                  children: [
+                    Center(
+                      child: UserAvatar(
+                        username: shownName,
+                        photoUrl: photo,
+                        size: 110,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: Text(
+                        loading
+                            ? '...'
+                            : (shownName.isEmpty ? 'Unknown' : shownName),
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.brown900,
+                        ),
+                      ),
+                    ),
+                    if (username.isNotEmpty)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '@$username',
+                            style: const TextStyle(color: AppColors.brown700),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 28),
+                    const Padding(
+                      padding: EdgeInsets.only(left: 4, bottom: 8),
+                      child: Text(
+                        'SIGNED IN AS',
+                        style: TextStyle(
+                          fontSize: 12,
+                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.gold700,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: softCardColor,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.brown900.withValues(alpha: 0.08),
+                            blurRadius: 16,
+                            offset: const Offset(0, 5),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        children: [
+                          _InfoRow(
+                            icon: Icons.alternate_email,
+                            label: 'Username',
+                            value: username.isEmpty ? '-' : username,
+                          ),
+                          _divider(),
+                          _InfoRow(
+                            icon: Icons.person_outline,
+                            label: 'Name',
+                            value: name.isEmpty ? '-' : name,
+                          ),
+                          _divider(),
+                          _InfoRow(
+                            icon: Icons.mail_outline,
+                            label: 'Email',
+                            value: email.isEmpty ? '-' : email,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    OutlinedButton.icon(
+                      onPressed: _confirmLogout,
+                      icon: const Icon(Icons.logout),
+                      label: const Text('Log out'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.brown900,
+                        side: const BorderSide(
+                          color: AppColors.gold700,
+                          width: 1.5,
+                        ),
+                        shape: const StadiumBorder(),
+                        minimumSize: const Size.fromHeight(52),
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _divider() => Divider(
+    height: 1,
+    thickness: 1,
+    indent: 50,
+    color: AppColors.gold700.withValues(alpha: 0.2),
+  );
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          Icon(icon, color: AppColors.gold700, size: 20),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    color: AppColors.brown700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.brown900,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
