@@ -104,6 +104,15 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _editingId;
   String _editDraft = '';
   final _inputFocus = FocusNode();
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _pinSub;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _pinned = [];
+  int _pinIndex = 0;
+  bool _jumping = false;
+  final Set<String> _unreadIds = {};
+  final DateTime _openedAt = DateTime.now();
+  String? _firstUnreadId;
+  int _unreadCount = 0;
+  bool _unreadScrolled = false;
 
   @override
   void initState() {
@@ -150,6 +159,26 @@ class _ChatScreenState extends State<ChatScreen> {
         });
       },
     );
+    _pinSub = chatRepo.pinnedStream(_chatId).listen((snap) {
+      final list = snap.docs
+          .where(_afterDelete)
+          .where((d) => d.data()['deletedForAll'] != true)
+          .toList();
+      // naya pin pehle
+      list.sort((a, b) {
+        final ta = a.data()['pinnedAt'] as Timestamp?;
+        final tb = b.data()['pinnedAt'] as Timestamp?;
+        if (ta == null && tb == null) return 0;
+        if (ta == null) return -1;
+        if (tb == null) return 1;
+        return tb.compareTo(ta);
+      });
+      if (!mounted) return;
+      setState(() {
+        _pinned = list;
+        if (_pinIndex >= list.length) _pinIndex = 0;
+      });
+    }, onError: (_) {});
   }
 
   /// Delete / clear ke baad ke messages dikhao, aur jo maine "delete for me"
@@ -171,6 +200,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _chatSub?.cancel();
     _searchCtrl.dispose();
     _inputFocus.dispose();
+    _pinSub?.cancel();
     _ticker?.cancel();
     _controller.dispose();
     _scroll.dispose();
@@ -184,13 +214,43 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onSnapshot(QuerySnapshot<Map<String, dynamic>> snap) {
     if (!mounted) return;
     final docs = snap.docs.where(_afterDelete).toList();
+
+    // Chat khulne ke pehle 2 second mein jo messages unread the unhein yaad rakho
+    if (DateTime.now().difference(_openedAt) < const Duration(seconds: 2)) {
+      for (final d in docs) {
+        final m = d.data();
+        if (m['type'] != 'system' &&
+            m['senderId'] == widget.otherUid &&
+            m['readAt'] == null) {
+          _unreadIds.add(d.id);
+        }
+      }
+    }
+    // docs naye pehle hain, sab se purana unread dhoondo
+    String? firstUnread;
+    for (final d in docs.reversed) {
+      if (_unreadIds.contains(d.id)) {
+        firstUnread = d.id;
+        break;
+      }
+    }
+    final unreadCount = docs.where((d) => _unreadIds.contains(d.id)).length;
+
     setState(() {
       _docs = docs;
       _loaded = true;
       _failed = false;
+      _firstUnreadId = firstUnread;
+      _unreadCount = unreadCount;
     });
     _sweepExpired();
     _markRead(docs);
+
+    // Bohat saare unread hon to banner tak scroll karo (sirf ek baar)
+    if (firstUnread != null && unreadCount > 6 && !_unreadScrolled) {
+      _unreadScrolled = true;
+      _scrollToFirstUnread();
+    }
   }
 
   /// Samne wale ke unread messages hon to read mark karo
@@ -452,11 +512,16 @@ class _ChatScreenState extends State<ChatScreen> {
         onPressed: _copyMessage,
       ),
       IconButton(
-        tooltip: 'Pin',
-        icon: const Icon(Icons.push_pin_outlined, color: Colors.black),
-        onPressed: () {
-          // TODO: pin message
-        },
+        tooltip: docs.every((d) => d.data()['pinned'] == true)
+            ? 'Unpin'
+            : 'Pin',
+        icon: Icon(
+          docs.every((d) => d.data()['pinned'] == true)
+              ? Icons.push_pin
+              : Icons.push_pin_outlined,
+          color: Colors.black,
+        ),
+        onPressed: _togglePinSelected,
       ),
       IconButton(
         tooltip: 'Delete',
@@ -585,6 +650,150 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  String _systemLabel(Map<String, dynamic> m) {
+    final who = m['senderId'] == _myUid ? 'You' : widget.username;
+    final n = (m['count'] as num?)?.toInt() ?? 1;
+    return n == 1 ? '$who pinned a message' : '$who pinned $n messages';
+  }
+
+  Future<void> _scrollToFirstUnread() async {
+    final id = _firstUnreadId;
+    if (id == null) return;
+    setState(() => _jumping = true);
+    await WidgetsBinding.instance.endOfFrame;
+
+    final ctx = _keys[id]?.currentContext;
+    if (ctx != null && ctx.mounted) {
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    }
+    if (!mounted) return;
+    setState(() => _jumping = false);
+  }
+
+  Future<void> _togglePinSelected() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final docs = _selectedDocs;
+    if (docs.isEmpty) return;
+
+    final unpin = docs.every((d) => d.data()['pinned'] == true);
+    if (!unpin) {
+      if (docs.any((d) => d.data()['deletedForAll'] == true)) {
+        _clearMsgSelection();
+        messenger.showSnackBar(
+          const SnackBar(content: Text("You can't pin a deleted message")),
+        );
+        return;
+      }
+      final fresh = docs.where((d) => d.data()['pinned'] != true).length;
+      if (_pinned.length + fresh > 3) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('You can pin up to 3 messages')),
+        );
+        return;
+      }
+    }
+
+    final ids = docs.map((d) => d.id).toList();
+    _clearMsgSelection();
+    try {
+      await chatRepo.setMessagesPinned(
+        chatId: _chatId,
+        messageIds: ids,
+        pinned: !unpin,
+      );
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            unpin
+                ? (ids.length == 1 ? 'Message unpinned' : 'Messages unpinned')
+                : (ids.length == 1 ? 'Message pinned' : 'Messages pinned'),
+          ),
+        ),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not update pin. Try again.')),
+      );
+    }
+  }
+
+  /// Pin kiye hue message tak scroll karo
+  Future<void> _jumpToPinned(
+      QueryDocumentSnapshot<Map<String, dynamic>> d,
+      ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _jumping = true);
+    await WidgetsBinding.instance.endOfFrame;
+
+    final ctx = _keys[d.id]?.currentContext;
+    var found = false;
+    if (ctx != null && ctx.mounted) {
+      found = true;
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _jumping = false;
+      if (_pinned.length > 1) _pinIndex = (_pinIndex + 1) % _pinned.length;
+    });
+    if (!found) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('This message is too old to show here')),
+      );
+    }
+  }
+
+  Widget _pinBar() {
+    final d = _pinned[_pinIndex.clamp(0, _pinned.length - 1)];
+    final text = (d.data()['text'] as String?) ?? '';
+    return Material(
+      color: softCardColor,
+      child: InkWell(
+        onTap: () => _jumpToPinned(d),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.push_pin, size: 18, color: AppColors.gold700),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.brown900,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (_pinned.length > 1)
+                Text(
+                  '${_pinIndex.clamp(0, _pinned.length - 1) + 1}/${_pinned.length}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.brown700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _deleteForEveryone(
       List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
       ) async {
@@ -676,7 +885,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final ids = docs.map((d) => d.id).toList();
 
     // Delete se pehle hi dekh lo ke sab se naya message delete ho raha hai ya nahi
-    final visible = _docs; // naye pehle
+    final visible =
+    _docs.where((d) => d.data()['type'] != 'system').toList(); // naye pehle
     final newestDeleted = visible.isNotEmpty && ids.contains(visible.first.id);
     final remaining = visible.where((d) => !ids.contains(d.id)).toList();
     final base = _lastMessageAt;
@@ -999,7 +1209,10 @@ class _ChatScreenState extends State<ChatScreen> {
       await chatRepo.clearChatForMe(_chatId);
       _deletedAt = await chatRepo.deletedAtFor(_chatId);
       if (!mounted) return;
-      setState(() => _docs = _docs.where(_afterDelete).toList());
+      setState(() {
+        _docs = _docs.where(_afterDelete).toList();
+        _pinned = _pinned.where(_afterDelete).toList();
+      });
       messenger.showSnackBar(
         const SnackBar(content: Text('Chat cleared')),
       );
@@ -1098,6 +1311,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             if (_searching) _searchField(),
+            if (_pinned.isNotEmpty) _pinBar(),
             Expanded(
               child: Container(
                 color: _chatBg,
@@ -1155,7 +1369,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return ListView.builder(
       controller: _scroll,
       reverse: true,
-      cacheExtent: _searching ? 100000 : null,
+      cacheExtent: (_searching || _jumping) ? 100000 : null,
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       itemCount: msgs.length,
       itemBuilder: (_, i) {
@@ -1172,6 +1386,10 @@ class _ChatScreenState extends State<ChatScreen> {
           key: ValueKey(doc.id),
           children: [
             if (showDate) _DateChip(label: _dayLabel(created)),
+            if (doc.id == _firstUnreadId) _UnreadBanner(count: _unreadCount),
+            if (m['type'] == 'system')
+              _DateChip(label: _systemLabel(m))
+            else
             KeyedSubtree(
               key: _keys.putIfAbsent(doc.id, () => GlobalKey()),
               child: GestureDetector(
@@ -1581,6 +1799,11 @@ class _Bubble extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                       ],
+                      if (data['pinned'] == true &&
+                          data['deletedForAll'] != true) ...[
+                        Icon(Icons.push_pin, size: 12, color: meta),
+                        const SizedBox(width: 4),
+                      ],
                       if (data['edited'] == true &&
                           data['deletedForAll'] != true) ...[
                         Text(
@@ -1613,6 +1836,31 @@ class _Bubble extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UnreadBanner extends StatelessWidget {
+  final int count;
+  const _UnreadBanner({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      alignment: Alignment.center,
+      color: AppColors.gold500.withValues(alpha: 0.2),
+      child: Text(
+        count == 1 ? '1 UNREAD MESSAGE' : '$count UNREAD MESSAGES',
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.5,
+          color: AppColors.brown700,
         ),
       ),
     );

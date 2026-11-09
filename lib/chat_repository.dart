@@ -138,6 +138,55 @@ class ChatRepository {
     return batch.commit();
   }
 
+  /// Messages pin / unpin karo (dono users ke liye)
+  Future<void> setMessagesPinned({
+    required String chatId,
+    required List<String> messageIds,
+    required bool pinned,
+  }) {
+    final msgs = _db.collection('chats').doc(chatId).collection('messages');
+    final batch = _db.batch();
+
+    for (final id in messageIds) {
+      batch.update(
+        msgs.doc(id),
+        pinned
+            ? {
+          'pinned': true,
+          'pinnedAt': FieldValue.serverTimestamp(),
+          'pinnedBy': _uid,
+        }
+            : {'pinned': false},
+      );
+    }
+
+    // Chat ke neeche "X pinned a message" ki line (sirf pin karne par)
+    if (pinned) {
+      batch.set(msgs.doc(), {
+        'type': 'system',
+        'systemKind': 'pin',
+        'senderId': _uid,
+        'text': '',
+        'count': messageIds.length,
+        'createdAt': FieldValue.serverTimestamp(),
+        'expiresAt': null,
+        'readAt': null,
+      });
+    }
+
+    return batch.commit();
+  }
+
+  /// Is chat ke pin kiye hue messages (50 wali hadd se azad)
+  Stream<QuerySnapshot<Map<String, dynamic>>> pinnedStream(String chatId) {
+    return _db
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .where('pinned', isEqualTo: true)
+        .snapshots();
+  }
+
   /// Chat ke messages sirf meri taraf se clear karo (chat list mein rahegi)
   Future<void> clearChatForMe(String chatId) {
     return _db.collection('chats').doc(chatId).update({
