@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:image_picker/image_picker.dart';
+import '../cloudinary_service.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +13,7 @@ import '../chat_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'contact_screen.dart';
+import 'forward_screen.dart';
 
 class _ChatBg {
   final String key;
@@ -75,6 +80,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _hasText = false;
   bool _marking = false;
   _DestructOption _destruct = _destructOptions.first;
+  final _picker = ImagePicker();
+  bool _uploading = false;
 
   /// Jin expired messages ka delete call ja chuka hai
   final Set<String> _deleting = {};
@@ -102,6 +109,59 @@ class _ChatScreenState extends State<ChatScreen> {
   final Set<String> _selectedMsgs = {};
   Timestamp? _lastMessageAt;
   String? _editingId;
+  Map<String, dynamic>? _replyTo;
+  String? _flashId;
+  Timer? _flashTimer;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _presenceSub;
+  bool _otherOnlineFlag = false;
+  DateTime? _otherLastSeen;
+  bool _otherHidesPresence = false;
+  // ---- typing ----
+  // meri taraf (likhne wala)
+  bool _iAmTyping = false;
+  DateTime? _lastTypingWrite;
+  Timer? _typingIdle;
+  String _lastTypedText = '';
+  // samne wale ki taraf (dekhne wala)
+  Object? _lastTypingStamp;
+  bool _typingPrimed = false;
+  DateTime? _otherTypingUntil;
+  String _shownStatus = '';
+
+  bool get _otherOnline {
+    final seen = _otherLastSeen;
+    return _otherOnlineFlag &&
+        seen != null &&
+        DateTime.now().difference(seen).inSeconds < 90;
+  }
+
+  /// Header ke neeche dikhane wala text. Block ho to kuch nahi dikhega
+  String get _presenceText {
+    if (_blockedByMe || _blockedByOther || _otherHidesPresence) return '';
+    if (_otherOnline) return 'online';
+    final seen = _otherLastSeen;
+    if (seen == null) return '';
+    final now = DateTime.now();
+    if (_sameDay(seen, now)) return 'last seen today at ${_hhmm(seen)}';
+    if (_sameDay(seen, now.subtract(const Duration(days: 1)))) {
+      return 'last seen yesterday at ${_hhmm(seen)}';
+    }
+    return 'last seen ${_dayLabel(seen)}';
+  }
+
+  bool get _otherTyping {
+    final until = _otherTypingUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  /// Header ke neeche: typing ho to wo, warna online / last seen
+  String get _headerStatus {
+    if (_blockedByMe || _blockedByOther) return '';
+    if (_otherTyping) return 'typing...';
+    return _presenceText;
+  }
+
+
   String _editDraft = '';
   final _inputFocus = FocusNode();
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _pinSub;
@@ -121,6 +181,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.addListener(() {
       final has = _controller.text.trim().isNotEmpty;
       if (has != _hasText) setState(() => _hasText = has);
+      _onTypingChanged();
     });
 
     _start();
@@ -141,12 +202,32 @@ class _ChatScreenState extends State<ChatScreen> {
       final t = doc.data()?['chatTheme'];
       final themeKey = t is Map ? t[_myUid] as String? : null;
       final lastAt = doc.data()?['lastMessageAt'] as Timestamp?;
+      final tm = doc.data()?['typing'];
+      final tStamp = tm is Map ? tm[widget.otherUid] : null;
       if (!mounted) return;
       setState(() {
         _blockedByMe = list.contains(_myUid);
         _blockedByOther = list.contains(widget.otherUid);
         _themeKey = themeKey;
         _lastMessageAt = lastAt;
+
+        if (tStamp == null) {
+          _otherTypingUntil = null;
+        } else if (_typingPrimed && tStamp != _lastTypingStamp) {
+          // naya typing signal aaya: 5 second tak "typing..." dikhao
+          _otherTypingUntil = DateTime.now().add(const Duration(seconds: 5));
+        }
+        _lastTypingStamp = tStamp;
+        _typingPrimed = true; // pehla snapshot purana ho sakta hai, usay ignore
+      });
+    }, onError: (_) {});
+    _presenceSub = chatRepo.userStream(widget.otherUid).listen((doc) {
+      final d = doc.data();
+      if (!mounted) return;
+      setState(() {
+        _otherOnlineFlag = d?['online'] == true;
+        _otherLastSeen = (d?['lastSeen'] as Timestamp?)?.toDate();
+        _otherHidesPresence = d?['hidePresence'] == true;
       });
     }, onError: (_) {});
     _sub = chatRepo.messagesStream(_chatId).listen(
@@ -202,7 +283,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _inputFocus.dispose();
     _pinSub?.cancel();
     _ticker?.cancel();
+    _stopTyping(); // chat se bahar jate hi typing band
     _controller.dispose();
+    _flashTimer?.cancel();
+    _presenceSub?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -280,8 +364,47 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Likhte waqt typing bhejo (har 3 second mein ek baar se zyada nahi)
+  void _onTypingChanged() {
+    // sirf cursor hila ho, text na badla ho to kuch nahi
+    if (_controller.text == _lastTypedText) return;
+    _lastTypedText = _controller.text;
+
+    if (_editingId != null) return; // edit karte waqt typing nahi dikhani
+    if (_controller.text.trim().isEmpty) {
+      _stopTyping();
+      return;
+    }
+
+    final now = DateTime.now();
+    if (!_iAmTyping ||
+        _lastTypingWrite == null ||
+        now.difference(_lastTypingWrite!).inSeconds >= 3) {
+      _iAmTyping = true;
+      _lastTypingWrite = now;
+      chatRepo.setTyping(_chatId, true).catchError((_) {});
+    }
+    // 4 second kuch na likhein to typing band
+    _typingIdle?.cancel();
+    _typingIdle = Timer(const Duration(seconds: 4), _stopTyping);
+  }
+
+  void _stopTyping() {
+    _typingIdle?.cancel();
+    if (!_iAmTyping) return;
+    _iAmTyping = false;
+    chatRepo.setTyping(_chatId, false).catchError((_) {});
+  }
+
   void _tick() {
     if (!mounted) return;
+
+    // typing / online ka text badla ho (expire hua) to hi rebuild
+    final status = _headerStatus;
+    if (status != _shownStatus) {
+      setState(() => _shownStatus = status);
+    }
+
     final hasExpiring = _docs.any((d) => d.data()['expiresAt'] != null);
     if (!hasExpiring) return;
     setState(() {}); // countdown refresh
@@ -309,13 +432,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    final reply = _replyTo;
     _controller.clear();
+    if (reply != null) setState(() => _replyTo = null);
 
     chatRepo
         .sendMessage(
       otherUid: widget.otherUid,
       text: text,
       destructAfter: _destruct.duration,
+      replyTo: reply,
     )
         .catchError((_) {
       if (!mounted) return;
@@ -332,6 +458,89 @@ class _ChatScreenState extends State<ChatScreen> {
         curve: Curves.easeOut,
       );
     }
+  }
+
+  Future<void> _pickAndSendImage(ImageSource source) async {
+    if (_uploading) return;
+    final XFile? picked = await _picker.pickImage(
+      source: source,
+      imageQuality: 70, // compress, free quota bachane ke liye
+      maxWidth: 1280,
+    );
+    if (picked == null) return;
+
+    final reply = _replyTo;
+    setState(() {
+      _uploading = true;
+      _replyTo = null;
+    });
+
+    try {
+      final r = await cloudinary.uploadImage(File(picked.path));
+      await chatRepo.sendImage(
+        otherUid: widget.otherUid,
+        imageUrl: r['url'] as String,
+        width: (r['width'] as num?)?.toInt(),
+        height: (r['height'] as num?)?.toInt(),
+        destructAfter: _destruct.duration,
+        replyTo: reply,
+      );
+      if (_scroll.hasClients) {
+        _scroll.animateTo(0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      debugPrint('IMAGE SEND ERROR: $e');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _showAttachSheet() {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Gallery'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickAndSendImage(ImageSource.gallery);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Camera'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickAndSendImage(ImageSource.camera);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openImage(String url) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          iconTheme: const IconThemeData(color: Colors.white),
+        ),
+        body: Center(
+          child: InteractiveViewer(
+            child: CachedNetworkImage(imageUrl: url),
+          ),
+        ),
+      ),
+    ));
   }
 
   Future<void> _pickDestruct() async {
@@ -459,6 +668,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Ek message select ho to header ke neeche emoji ki bar
   Widget _reactionBar() {
+    final sel = _selectedDocs;
+    final r = sel.length == 1 ? sel.first.data()['reactions'] : null;
+    final mineReaction = r is Map ? r[_myUid] : null;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Container(
@@ -481,8 +693,14 @@ class _ChatScreenState extends State<ChatScreen> {
               InkWell(
                 borderRadius: BorderRadius.circular(20),
                 onTap: () => _reactToSelected(e),
-                child: Padding(
+                child: Container(
                   padding: const EdgeInsets.all(6),
+                  decoration: mineReaction == e
+                      ? const BoxDecoration(
+                    color: AppColors.gold200,
+                    shape: BoxShape.circle,
+                  )
+                      : null,
                   child: Text(e, style: const TextStyle(fontSize: 26)),
                 ),
               ),
@@ -492,8 +710,27 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _reactToSelected(String emoji) {
-    // TODO: react
+  Future<void> _reactToSelected(String emoji) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final docs = _selectedDocs;
+    if (docs.length != 1) return;
+    final d = docs.first;
+
+    final r = d.data()['reactions'];
+    final mine = r is Map ? r[_myUid] : null;
+
+    _clearMsgSelection();
+    try {
+      await chatRepo.setReaction(
+        chatId: _chatId,
+        messageId: d.id,
+        emoji: mine == emoji ? null : emoji, // wahi emoji dobara = hata do
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not react. Try again.')),
+      );
+    }
   }
 
   /// Message select hone par header ke buttons
@@ -546,7 +783,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onMsgMenu(String v) {
     switch (v) {
       case 'forward':
-      // TODO: forward message
+        _forwardSelected();
         break;
       case 'edit':
         _startEdit();
@@ -577,6 +814,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (docs.length != 1) return;
     final d = docs.first;
     if (!_isMine(d) ||
+        d.data()['type'] == 'image' ||
         d.data()['deletedForAll'] == true ||
         !_within(d, const Duration(minutes: 15))) {
       _clearMsgSelection();
@@ -589,6 +827,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = (d.data()['text'] as String?) ?? '';
     setState(() {
       _editingId = d.id;
+      _replyTo = null;
       _editDraft = _controller.text; // jo likh rahi thi wo wapis ke liye
       _selectedMsgs.clear();
     });
@@ -604,6 +843,62 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.selection =
         TextSelection.collapsed(offset: _editDraft.length);
     _editDraft = '';
+  }
+
+  void _startReply(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    if (_editingId != null) return;
+    final m = d.data();
+    if (m['deletedForAll'] == true || m['type'] == 'system') return;
+    final text = (m['text'] as String?) ?? '';
+    setState(() {
+      _replyTo = {
+        'id': d.id,
+        'text': text.length > 200 ? text.substring(0, 200) : text,
+        'senderId': m['senderId'],
+      };
+    });
+    _inputFocus.requestFocus();
+  }
+
+  void _cancelReply() {
+    if (_replyTo == null) return;
+    setState(() => _replyTo = null);
+  }
+
+  /// Quote par tap karne par original message tak scroll + 1 second highlight
+  Future<void> _jumpToMessage(String id) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _jumping = true);
+    await WidgetsBinding.instance.endOfFrame;
+
+    final ctx = _keys[id]?.currentContext;
+    var found = false;
+    if (ctx != null && ctx.mounted) {
+      found = true;
+      await Scrollable.ensureVisible(
+        ctx,
+        alignment: 0.5,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    }
+    if (!mounted) return;
+    setState(() {
+      _jumping = false;
+      if (found) _flashId = id;
+    });
+
+    if (found) {
+      _flashTimer?.cancel();
+      _flashTimer = Timer(const Duration(seconds: 1), () {
+        if (!mounted) return;
+        setState(() => _flashId = null);
+      });
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('This message is too old to show here')),
+      );
+    }
   }
 
   Future<void> _submitEdit() async {
@@ -673,6 +968,43 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (!mounted) return;
     setState(() => _jumping = false);
+  }
+
+  Future<void> _forwardSelected() async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    // _docs naye pehle hain, forward ke liye purane pehle chahiye
+    final texts = _selectedDocs.reversed
+        .where((d) => d.data()['deletedForAll'] != true)
+        .map((d) => (d.data()['text'] as String?) ?? '')
+        .where((t) => t.trim().isNotEmpty)
+        .toList();
+
+    if (texts.isEmpty) {
+      _clearMsgSelection();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Nothing to forward')),
+      );
+      return;
+    }
+
+    final sent = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => ForwardScreen(texts: texts)),
+    );
+    if (!mounted) return;
+
+    if (sent == true) {
+      _clearMsgSelection();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            texts.length == 1
+                ? 'Message forwarded'
+                : '${texts.length} messages forwarded',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _togglePinSelected() async {
@@ -1294,6 +1626,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 title: _msgSelecting
                     ? '${_selectedDocs.length} selected'
                     : widget.username,
+                subtitle: _msgSelecting ? null : _headerStatus,
                 titleStyle:
                 const TextStyle(fontSize: 18, color: Colors.black),
                 showBack: !_msgSelecting,
@@ -1396,31 +1729,61 @@ class _ChatScreenState extends State<ChatScreen> {
                 behavior: HitTestBehavior.opaque,
                 onLongPress: () => _toggleMsg(doc.id),
                 onTap: _msgSelecting ? () => _toggleMsg(doc.id) : null,
-                child: Container(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
                   color: _selectedMsgs.contains(doc.id)
                       ? AppColors.gold400.withValues(alpha: 0.3)
-                      : Colors.transparent,
+                      : (doc.id == _flashId
+                      ? AppColors.gold400.withValues(alpha: 0.45)
+                      : AppColors.gold400.withValues(alpha: 0.0)),
                   child: Column(
                     children: [
                       if (_selectedMsgs.length == 1 &&
-                          _selectedMsgs.contains(doc.id))
+                          _selectedMsgs.contains(doc.id) &&
+                          m['deletedForAll'] != true)
                         Align(
                           alignment: m['senderId'] == _myUid
                               ? Alignment.centerRight
                               : Alignment.centerLeft,
                           child: _reactionBar(),
                         ),
-                      _Bubble(
-                        data: m,
-                        mine: m['senderId'] == _myUid,
-                        pending:
-                        doc.metadata.hasPendingWrites || created == null,
-                        time: created,
-                        expiresAt: (m['expiresAt'] as Timestamp?)?.toDate(),
-                        now: now,
-                        highlight: _searchQuery,
-                        current: doc.id == currentId,
+                      _SwipeToReply(
+                        enabled: !_msgSelecting && m['deletedForAll'] != true,
+                        onReply: () => _startReply(doc),
+                        child: _Bubble(
+                          onImageTap: _openImage,
+                          data: m,
+                          mine: m['senderId'] == _myUid,
+                          pending: doc.metadata.hasPendingWrites || created == null,
+                          time: created,
+                          expiresAt: (m['expiresAt'] as Timestamp?)?.toDate(),
+                          now: now,
+                          highlight: _searchQuery,
+                          current: doc.id == currentId,
+                          replyName: (m['replyTo'] is Map &&
+                              (m['replyTo'] as Map)['senderId'] == _myUid)
+                              ? 'You'
+                              : widget.username,
+                          onReplyTap: m['replyTo'] is Map
+                              ? () => _jumpToMessage((m['replyTo'] as Map)['id'] as String)
+                              : null,
+                        ),
                       ),
+                      if (m['reactions'] is Map &&
+                          (m['reactions'] as Map).isNotEmpty &&
+                          m['deletedForAll'] != true)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                          child: Align(
+                            alignment: m['senderId'] == _myUid
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: _ReactionPill(
+                              reactions: m['reactions'] as Map,
+                              myUid: _myUid,
+                            ),
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -1503,6 +1866,59 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (_uploading)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6),
+                  child: LinearProgressIndicator(
+                    color: AppColors.gold700,
+                    minHeight: 3,
+                  ),
+                ),
+              if (_replyTo != null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.gold500.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.reply, size: 18, color: AppColors.gold700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _replyTo!['senderId'] == _myUid
+                                  ? 'Replying to yourself'
+                                  : 'Replying to ${widget.username}',
+                              style: const TextStyle(
+                                color: AppColors.gold700,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            Text(
+                              (_replyTo!['text'] as String?) ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: AppColors.brown900, fontSize: 13),
+                            ),
+                          ],
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: _cancelReply,
+                        child: const Icon(Icons.close,
+                            size: 18, color: AppColors.brown700),
+                      ),
+                    ],
+                  ),
+                ),
               if (_editingId != null)
                 Container(
                   width: double.infinity,
@@ -1580,6 +1996,14 @@ class _ChatScreenState extends State<ChatScreen> {
                       active ? Icons.timer : Icons.timer_outlined,
                       color: active ? AppColors.gold700 : AppColors.brown700,
                     ),
+                  ),
+                  IconButton(
+                    tooltip: 'Attach',
+                    onPressed: (_editingId != null || _uploading)
+                        ? null
+                        : _showAttachSheet,
+                    icon: const Icon(Icons.attach_file,
+                        color: AppColors.brown700),
                   ),
                   Expanded(
                     child: Container(
@@ -1677,6 +2101,9 @@ class _Bubble extends StatelessWidget {
   final DateTime now;
   final String highlight;
   final bool current;
+  final String replyName;
+  final VoidCallback? onReplyTap;
+  final void Function(String url)? onImageTap;
 
   const _Bubble({
     required this.data,
@@ -1687,7 +2114,12 @@ class _Bubble extends StatelessWidget {
     required this.now,
     this.highlight = '',
     this.current = false,
+    this.replyName = '',
+    this.onReplyTap,
+    this.onImageTap,
   });
+
+
 
   List<TextSpan> _spans(String text) {
     final q = highlight;
@@ -1720,7 +2152,9 @@ class _Bubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = (data['text'] as String?) ?? '';
+    final text = data['type'] == 'image'
+        ? '📷 Photo'
+        : ((data['text'] as String?) ?? '');
     final read = data['readAt'] != null;
     final fg = mine ? AppColors.cream : AppColors.brown900;
     final meta =
@@ -1761,6 +2195,67 @@ class _Bubble extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (data['forwarded'] == true && data['deletedForAll'] != true)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.forward, size: 13, color: meta),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Forwarded',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: meta,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                if (data['replyTo'] is Map && data['deletedForAll'] != true)
+                  GestureDetector(
+                    onTap: onReplyTap,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+                          decoration: BoxDecoration(
+                            color: (mine ? Colors.black : AppColors.gold500)
+                                .withValues(alpha: 0.15),
+                            border: Border(
+                              left: BorderSide(
+                                color: mine ? AppColors.cream : AppColors.gold700,
+                                width: 3,
+                              ),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                replyName,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: mine ? AppColors.cream : AppColors.gold700,
+                                ),
+                              ),
+                              Text(
+                                ((data['replyTo'] as Map)['text'] as String?) ?? '',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 13, color: meta),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 if (data['deletedForAll'] == true)
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -1779,11 +2274,41 @@ class _Bubble extends StatelessWidget {
                       ),
                     ],
                   )
-                else
-                  Text.rich(
-                    TextSpan(children: _spans(text)),
-                    style: TextStyle(color: fg, fontSize: 15.5, height: 1.3),
-                  ),
+                else ...[
+                  if (data['type'] == 'image' && data['imageUrl'] is String)
+                    GestureDetector(
+                      onTap: () => onImageTap?.call(data['imageUrl'] as String),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: AspectRatio(
+                          aspectRatio: (data['width'] is num &&
+                              data['height'] is num &&
+                              (data['height'] as num) > 0)
+                              ? (data['width'] as num) / (data['height'] as num)
+                              : 1,
+                          child: CachedNetworkImage(
+                            imageUrl: data['imageUrl'] as String,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => const Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            errorWidget: (_, __, ___) =>
+                            const Icon(Icons.broken_image_outlined),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (text.isNotEmpty)
+                    Padding(
+                      padding: EdgeInsets.only(
+                          top: data['type'] == 'image' ? 6 : 0),
+                      child: Text.rich(
+                        TextSpan(children: _spans(text)),
+                        style:
+                        TextStyle(color: fg, fontSize: 15.5, height: 1.3),
+                      ),
+                    ),
+                ],
                 const SizedBox(height: 4),
                 Align(
                   alignment: Alignment.centerRight,
@@ -1837,6 +2362,169 @@ class _Bubble extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SwipeToReply extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onReply;
+  final bool enabled;
+  const _SwipeToReply({
+    required this.child,
+    required this.onReply,
+    this.enabled = true,
+  });
+
+  @override
+  State<_SwipeToReply> createState() => _SwipeToReplyState();
+}
+
+class _SwipeToReplyState extends State<_SwipeToReply>
+    with SingleTickerProviderStateMixin {
+  static const _trigger = 60.0;
+  static const _maxDrag = 80.0;
+
+  late final AnimationController _ctrl;
+  Animation<double>? _anim;
+  double _dx = 0;
+  bool _fired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+    )..addListener(() {
+      final a = _anim;
+      if (a != null) setState(() => _dx = a.value);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onUpdate(DragUpdateDetails d) {
+    if (!widget.enabled) return;
+    _ctrl.stop();
+    final next = (_dx + d.delta.dx).clamp(0.0, _maxDrag);
+    if (!_fired && next >= _trigger) {
+      _fired = true;
+      HapticFeedback.lightImpact();
+    }
+    setState(() => _dx = next);
+  }
+
+  void _onEnd() {
+    if (_fired) widget.onReply();
+    _fired = false;
+    _anim = Tween<double>(begin: _dx, end: 0).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOut),
+    );
+    _ctrl.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = (_dx / _trigger).clamp(0.0, 1.0);
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragUpdate: _onUpdate,
+      onHorizontalDragEnd: (_) => _onEnd(),
+      onHorizontalDragCancel: _onEnd,
+      child: Stack(
+        alignment: Alignment.centerLeft,
+        children: [
+          Positioned(
+            left: 8,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: Opacity(
+                opacity: p,
+                child: Transform.scale(
+                  scale: 0.6 + 0.4 * p,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.gold500.withValues(alpha: 0.25),
+                    ),
+                    child: const Icon(Icons.reply,
+                        size: 18, color: AppColors.brown700),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Transform.translate(
+            offset: Offset(_dx, 0),
+            child: widget.child,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReactionPill extends StatelessWidget {
+  final Map reactions;
+  final String myUid;
+  const _ReactionPill({required this.reactions, required this.myUid});
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = <String, int>{};
+    for (final e in reactions.values) {
+      if (e is String) counts[e] = (counts[e] ?? 0) + 1;
+    }
+    if (counts.isEmpty) return const SizedBox.shrink();
+
+    final total = counts.values.fold<int>(0, (a, b) => a + b);
+    final emojis = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final iReacted = reactions[myUid] is String;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: softCardColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: iReacted ? AppColors.gold700 : AppColors.gold200,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.brown900.withValues(alpha: 0.1),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            emojis.take(3).map((e) => e.key).join(),
+            style: const TextStyle(fontSize: 14),
+          ),
+          if (total > 1) ...[
+            const SizedBox(width: 4),
+            Text(
+              '$total',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.brown700,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

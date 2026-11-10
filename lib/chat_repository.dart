@@ -138,6 +138,20 @@ class ChatRepository {
     return batch.commit();
   }
 
+  /// Message par meri reaction lagao. emoji null ho to hata do
+  Future<void> setReaction({
+    required String chatId,
+    required String messageId,
+    String? emoji,
+  }) {
+    return _db
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .doc(messageId)
+        .update({'reactions.$_uid': emoji ?? FieldValue.delete()});
+  }
+
   /// Messages pin / unpin karo (dono users ke liye)
   Future<void> setMessagesPinned({
     required String chatId,
@@ -326,12 +340,62 @@ class ChatRepository {
         .snapshots();
   }
 
+  /// Image message bhejo (image Cloudinary pe upload ho chuki hai)
+  Future<void> sendImage({
+    required String otherUid,
+    required String imageUrl,
+    int? width,
+    int? height,
+    String caption = '',
+    Duration? destructAfter,
+    Map<String, dynamic>? replyTo,
+  }) async {
+    final chatId = chatIdWith(otherUid);
+    final chatRef = _db.collection('chats').doc(chatId);
+    final msgRef = chatRef.collection('messages').doc();
+    final participants = [_uid, otherUid]..sort();
+    final cap = caption.trim();
+
+    final batch = _db.batch();
+
+    batch.set(
+      chatRef,
+      {
+        'participants': participants,
+        'lastMessage': cap.isEmpty ? '📷 Photo' : '📷 $cap',
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastSenderId': _uid,
+        'unread': {otherUid: FieldValue.increment(1)},
+      },
+      SetOptions(merge: true),
+    );
+
+    batch.set(msgRef, {
+      'senderId': _uid,
+      'type': 'image',
+      'imageUrl': imageUrl,
+      if (width != null) 'width': width,
+      if (height != null) 'height': height,
+      'text': cap,
+      if (replyTo != null) 'replyTo': replyTo,
+      'createdAt': FieldValue.serverTimestamp(),
+      'expiresAt': destructAfter == null
+          ? null
+          : Timestamp.fromDate(DateTime.now().add(destructAfter)),
+      'readAt': null,
+    });
+
+    await batch.commit();
+  }
+
   /// Message bhejo. Pehla message chat bhi bana deta hai.
   /// destructAfter dene par message utni der baad expire hota hai.
   Future<void> sendMessage({
     required String otherUid,
     required String text,
     Duration? destructAfter,
+    bool forwarded = false,
+    Map<String, dynamic>? replyTo,
   }) async {
     final body = text.trim();
     if (body.isEmpty) return;
@@ -359,6 +423,8 @@ class ChatRepository {
       'senderId': _uid,
       'text': body,
       'type': 'text',
+      if (replyTo != null) 'replyTo': replyTo,
+      if (forwarded) 'forwarded': true,
       'createdAt': FieldValue.serverTimestamp(),
       'expiresAt': destructAfter == null
           ? null
@@ -429,6 +495,35 @@ class ChatRepository {
     final data = doc.data();
     if (data != null) _userCache[uid] = data;
     return data;
+  }
+
+  /// Meri online / last seen halat likho
+  Future<void> setPresence(bool online) {
+    return _db.collection('users').doc(_uid).set({
+      'online': online,
+      'lastSeen': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Apna online / last seen dusron se chhupao ya dikhao
+  Future<void> setHidePresence(bool hide) async {
+    await _db.collection('users').doc(_uid).update({'hidePresence': hide});
+    // cache purana na rahe, warna profile screen galat value dikhayegi
+    final c = _userCache[_uid];
+    if (c != null) _userCache[_uid] = {...c, 'hidePresence': hide};
+  }
+
+  /// Mera typing status is chat mein likho / hatao
+  Future<void> setTyping(String chatId, bool typing) {
+    return _db.collection('chats').doc(chatId).update({
+      'typing.$_uid':
+      typing ? FieldValue.serverTimestamp() : FieldValue.delete(),
+    });
+  }
+
+  /// Kisi user ke document ko live sunne ke liye (online / last seen)
+  Stream<DocumentSnapshot<Map<String, dynamic>>> userStream(String uid) {
+    return _db.collection('users').doc(uid).snapshots();
   }
 }
 

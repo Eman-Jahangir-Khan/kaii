@@ -7,6 +7,7 @@ import '../auth_repository.dart';
 import '../chat_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../presence_service.dart';
 import 'chat_screen.dart';
 import 'new_chat_screen.dart';
 import 'requests_screen.dart';
@@ -37,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    presenceService.start();
     _sub = chatRepo.chatsStream().listen(
       _onSnapshot,
       onError: (_) {
@@ -663,6 +665,21 @@ class _ChatTileState extends State<_ChatTile> {
   late final String _otherUid;
   late final Future<Map<String, dynamic>?> _future;
 
+  // ---- typing ----
+  Object? _lastTypingStamp;
+  DateTime? _typingUntil;
+  Timer? _typingTimer;
+
+  bool get _typing {
+    final until = _typingUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  Object? _typingStampOf(Map<String, dynamic> d) {
+    final tm = d['typing'];
+    return tm is Map ? tm[_otherUid] : null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -672,6 +689,31 @@ class _ChatTileState extends State<_ChatTile> {
       orElse: () => widget.myUid,
     );
     _future = chatRepo.getUser(_otherUid);
+    _lastTypingStamp = _typingStampOf(widget.data); // purana stamp ignore
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final stamp = _typingStampOf(widget.data);
+    if (stamp == null) {
+      _typingTimer?.cancel();
+      _typingUntil = null;
+    } else if (stamp != _lastTypingStamp) {
+      // naya typing signal: 5 second tak "typing..." dikhao
+      _typingUntil = DateTime.now().add(const Duration(seconds: 5));
+      _typingTimer?.cancel();
+      _typingTimer = Timer(const Duration(seconds: 5), () {
+        if (mounted) setState(() {});
+      });
+    }
+    _lastTypingStamp = stamp;
+  }
+
+  @override
+  void dispose() {
+    _typingTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -802,8 +844,19 @@ class _ChatTileState extends State<_ChatTile> {
                             ],
                           ),
                           const SizedBox(height: 3),
-                          Text(
-                            isCleared || previewText.isEmpty
+                          if (_typing && !blocked)
+                            const Text(
+                              'typing...',
+                              maxLines: 1,
+                              style: TextStyle(
+                                color: AppColors.gold700,
+                                fontWeight: FontWeight.w700,
+                                fontStyle: FontStyle.italic,
+                              ),
+                            )
+                          else
+                            Text(
+                              isCleared || previewText.isEmpty
                                 ? ''
                                 : (previewMine
                                 ? 'You: $previewText'

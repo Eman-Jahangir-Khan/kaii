@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'presence_service.dart';
 
 class UsernameTakenException implements Exception {
   @override
@@ -148,6 +149,7 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
+    await presenceService.stop(); // signOut se pehle, warna uid nahi milta
     try {
       await GoogleSignIn.instance.signOut();
     } catch (_) {}

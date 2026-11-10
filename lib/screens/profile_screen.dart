@@ -18,6 +18,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late final String _uid = _user?.uid ?? '';
   late final Future<Map<String, dynamic>?> _future = chatRepo.getUser(_uid);
 
+  bool? _showPresence; // null = Firestore ki value use hogi
+
+  Future<void> _togglePresence(bool show) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _showPresence = show);
+    try {
+      await chatRepo.setHidePresence(!show);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _showPresence = !show);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not update. Try again.')),
+      );
+    }
+  }
+
   Future<void> _confirmLogout() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -80,6 +96,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 final name = (data?['name'] as String?) ?? '';
                 final photo = (data?['photoUrl'] as String?) ?? '';
                 final shownName = name.isNotEmpty ? name : username;
+                final showPresence =
+                    _showPresence ?? (data?['hidePresence'] != true);
 
                 return ListView(
                   padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
@@ -159,6 +177,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             value: email.isEmpty ? '-' : email,
                           ),
                         ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: softCardColor,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.brown900.withValues(alpha: 0.08),
+                            blurRadius: 16,
+                            offset: const Offset(0, 5),
+                          ),
+                        ],
+                      ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: SwitchListTile(
+                          value: showPresence,
+                          onChanged: loading ? null : _togglePresence,
+                          secondary: const Icon(Icons.visibility_outlined,
+                              color: AppColors.gold700),
+                          title: const Text(
+                            'Online status & last seen',
+                            style: TextStyle(
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.brown900,
+                            ),
+                          ),
+                          subtitle: const Text(
+                            "When off, others can't see if you're online or when you were last seen.",
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: AppColors.brown700,
+                            ),
+                          ),
+                          thumbColor: WidgetStateProperty.resolveWith(
+                                (s) => s.contains(WidgetState.selected)
+                                ? AppColors.cream
+                                : AppColors.brown700,
+                          ),
+                          trackColor: WidgetStateProperty.resolveWith(
+                                (s) => s.contains(WidgetState.selected)
+                                ? AppColors.gold700
+                                : AppColors.gold200,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 28),

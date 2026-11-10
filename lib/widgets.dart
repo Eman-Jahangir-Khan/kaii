@@ -737,6 +737,7 @@ class GradientHeader extends StatelessWidget {
   final Widget? leading;
   final List<Widget> actions;
   final Widget? bottom;
+  final String? subtitle;
 
   const GradientHeader({
     super.key,
@@ -746,6 +747,7 @@ class GradientHeader extends StatelessWidget {
     this.leading,
     this.actions = const [],
     this.bottom,
+    this.subtitle,
   });
 
   @override
@@ -786,15 +788,31 @@ class GradientHeader extends StatelessWidget {
                       const SizedBox(width: 12),
                     ],
                     Expanded(
-                      child: Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black,
-                        ).merge(titleStyle),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.black,
+                            ).merge(titleStyle),
+                          ),
+                          if (subtitle != null && subtitle!.isNotEmpty)
+                            Text(
+                              subtitle!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                color: Colors.black87,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                     ...actions,
