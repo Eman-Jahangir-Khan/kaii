@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import '../widgets.dart';
+import 'groups_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
 
@@ -17,6 +18,26 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _index = 0;
+  final _pageCtrl = PageController();
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int i) {
+    if (i == _index) return;
+    if ((i - _index).abs() == 1) {
+      _pageCtrl.animateToPage(
+        i,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _pageCtrl.jumpToPage(i); // door wali tab par beech ke pages nahi guzarte
+    }
+  }
 
   static const _icons = <IconData>[
     Icons.chat_bubble_outline_rounded,
@@ -31,16 +52,26 @@ class _MainShellState extends State<MainShell> {
     final media = MediaQuery.of(context);
     final keyboardOpen = media.viewInsets.bottom > 0;
 
-    return Scaffold(
+    return PopScope(
+        canPop: _index == 0,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _goTo(0);
+        },
+        child: Scaffold(
       backgroundColor: AppColors.cream,
       // IndexedStack: tab badalne par purani tab ki halat (search wagaira) bani rehti hai
-      body: IndexedStack(
-        index: _index,
+      body: PageView(
+        controller: _pageCtrl,
+        onPageChanged: (i) => setState(() => _index = i),
         children: const [
-          HomeScreen(),
-          _ComingSoonTab(title: 'Groups', icon: Icons.groups_outlined),
-          _ComingSoonTab(title: 'Status', icon: Icons.donut_large_rounded),
-          ProfileScreen(),
+          _KeepAlive(child: HomeScreen()),
+          _KeepAlive(child: GroupsScreen()),
+          _KeepAlive(
+            child: _ComingSoonTab(
+                title: 'Status', icon: Icons.donut_large_rounded),
+          ),
+          _KeepAlive(child: ProfileScreen()),
         ],
       ),
       // keyboard khulne par bar chhupa do taake jagah na ghire
@@ -53,10 +84,30 @@ class _MainShellState extends State<MainShell> {
           index: _index,
           icons: _icons,
           labels: _labels,
-          onTap: (i) => setState(() => _index = i),
+          onTap: _goTo,
         ),
       ),
-    );
+        ), );
+  }
+}
+
+class _KeepAlive extends StatefulWidget {
+  final Widget child;
+  const _KeepAlive({required this.child});
+
+  @override
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
   }
 }
 
