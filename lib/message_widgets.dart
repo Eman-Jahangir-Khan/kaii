@@ -143,6 +143,25 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ),
                   ),
+                if (data['forwarded'] == true && !deleted)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.forward, size: 13, color: meta),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Forwarded',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: meta,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 if (data['replyTo'] is Map && !deleted)
                   GestureDetector(
                     onTap: onReplyTap,

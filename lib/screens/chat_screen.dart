@@ -13,7 +13,7 @@ import '../chat_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'contact_screen.dart';
-import 'forward_screen.dart';
+import 'forward_to_screen.dart';
 
 class _ChatBg {
   final String key;
@@ -989,7 +989,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final sent = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => ForwardScreen(texts: texts)),
+      MaterialPageRoute(builder: (_) => ForwardToScreen(texts: texts)),
     );
     if (!mounted) return;
 

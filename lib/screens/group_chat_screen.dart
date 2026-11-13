@@ -16,6 +16,7 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'group_info_screen.dart';
 import 'group_message_info_screen.dart';
+import 'forward_to_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
   final String groupId;
@@ -48,6 +49,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   bool _isMember = true;
   String _leftBy = ''; // '' = khud chhoda, warna remove karne wale ka naam
   Timestamp? _msgBefore;
+
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _pinSub;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _pinnedRaw = [];
+  int _pinIndex = 0;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _groupSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _msgSub;
@@ -87,6 +92,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         if (!mounted) return;
         if (e is FirebaseException && e.code == 'permission-denied') {
           _msgSub?.cancel();
+          _pinSub?.cancel();
           setState(() {
             _isMember = false;
             _loaded = true;
@@ -114,6 +120,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _flashTimer?.cancel();
     _groupSub?.cancel();
     _msgSub?.cancel();
+    _pinSub?.cancel();
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
     _inputFocus.dispose();
@@ -153,11 +160,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (!member) {
       // access khatam, par purani chat dikhti rahe (chhodne ke waqt tak)
       if (leftAt is Timestamp) _startMessages(before: leftAt);
+      _pinSub?.cancel();
+      _pinSub = null;
+      if (_pinnedRaw.isNotEmpty) setState(() => _pinnedRaw = []);
       return;
     }
 
     _ensureUsers(members);
     _startMessages();
+    _startPins();
 
     // naya message aaya aur screen khuli hai: padha hua mark karo
     final unread = data['unread'];
@@ -192,6 +203,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           _loaded = true;
         });
       },
+    );
+  }
+
+  void _startPins() {
+    if (_pinSub != null) return;
+    _pinSub = groupRepo.pinnedStream(widget.groupId).listen(
+          (snap) {
+        if (mounted) setState(() => _pinnedRaw = snap.docs);
+      },
+      onError: (_) {},
     );
   }
 
@@ -241,37 +262,51 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   /// Meri join hone ki tareekh se pehle ke messages aur meri taraf se delete kiye hue na dikhao
   /// Jo messages meri membership ke dauran ke hain wahi dikhao:
   /// pehli join se pehle ke aur chhodne-se-dobara-add-hone ke beech ke nahi
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _visible {
+  bool _canSee(Map<String, dynamic> m) {
+    final del = m['deletedFor'];
+    if (del is List && del.contains(_myUid)) return false;
+
     final j = _group['joinedAt'];
     final joined = j is Map ? j[_myUid] : null;
+    final c = m['createdAt'];
+    if (c is! Timestamp) return true;
+    if (joined is Timestamp && c.compareTo(joined) < 0) return false;
 
-    // [gap shuru (ms), gap khatam (Timestamp)]
-    final gaps = <MapEntry<int, Timestamp>>[];
     final g = _group['gaps'];
     if (g is Map && g[_myUid] is Map) {
-      (g[_myUid] as Map).forEach((from, to) {
-        final ms = int.tryParse(from.toString());
-        if (ms != null && to is Timestamp) gaps.add(MapEntry(ms, to));
-      });
-    }
-
-    return _docs.where((d) {
-      final m = d.data();
-      final del = m['deletedFor'];
-      if (del is List && del.contains(_myUid)) return false;
-
-      final c = m['createdAt'];
-      if (c is Timestamp) {
-        if (joined is Timestamp && c.compareTo(joined) < 0) return false;
-        for (final gap in gaps) {
-          // shuru par "You left / removed" ka message dikhta rahe, ant par "added" ka
-          if (c.millisecondsSinceEpoch > gap.key && c.compareTo(gap.value) < 0) {
-            return false;
-          }
+      for (final e in (g[_myUid] as Map).entries) {
+        final from = int.tryParse(e.key.toString());
+        final to = e.value;
+        if (from != null &&
+            to is Timestamp &&
+            c.millisecondsSinceEpoch > from &&
+            c.compareTo(to) < 0) {
+          return false;
         }
       }
-      return true;
+    }
+    return true;
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _visible =>
+      _docs.where((d) => _canSee(d.data())).toList();
+
+  /// Pin kiye hue messages (naya pehle, delete hue nahi)
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _pinned {
+    final list = _pinnedRaw.where((d) {
+      final m = d.data();
+      return m['pinned'] == true &&
+          m['deletedForAll'] != true &&
+          _canSee(m);
     }).toList();
+    list.sort((a, b) {
+      final ta = a.data()['pinnedAt'] as Timestamp?;
+      final tb = b.data()['pinnedAt'] as Timestamp?;
+      if (ta == null) return -1;
+      if (tb == null) return 1;
+      return tb.compareTo(ta);
+    });
+    return list;
   }
 
   List<QueryDocumentSnapshot<Map<String, dynamic>>> get _selectedDocs =>
@@ -679,51 +714,67 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   // UI
   // -------------------------------------------------------------------------
 
+  PopupMenuItem<String> _menuItem(String v, IconData icon, String label) {
+    return PopupMenuItem(
+      value: v,
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: AppColors.brown900),
+          const SizedBox(width: 12),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.brown900,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _msgActions() {
     final docs = _selectedDocs;
     if (docs.isEmpty) return const [];
     final single = docs.length == 1 ? docs.first : null;
+
     final canEdit = single != null &&
+        _isMember &&
         _isMine(single) &&
         single.data()['type'] == 'text' &&
         single.data()['deletedForAll'] != true &&
         _within(single, const Duration(minutes: 15));
+    final canInfo = single != null &&
+        _isMember &&
+        _isMine(single) &&
+        single.data()['type'] != 'system' &&
+        single.data()['deletedForAll'] != true;
     final hasText = docs.any((d) =>
     d.data()['deletedForAll'] != true &&
         ((d.data()['text'] as String?) ?? '').isNotEmpty);
+    final allPinned = docs.every((d) => d.data()['pinned'] == true);
+
+    final menu = <PopupMenuItem<String>>[
+      if (hasText) _menuItem('forward', Icons.forward, 'Forward'),
+      if (canEdit) _menuItem('edit', Icons.edit_outlined, 'Edit'),
+      if (canInfo) _menuItem('info', Icons.info_outline, 'Info'),
+    ];
 
     return [
-      if (single != null &&
-          _isMine(single) &&
-          single.data()['type'] != 'system' &&
-          single.data()['deletedForAll'] != true)
-        IconButton(
-          tooltip: 'Info',
-          icon: const Icon(Icons.info_outline, color: Colors.black),
-          onPressed: () {
-            final data = single.data();
-            _clearSelection();
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => GroupMessageInfoScreen(
-                  groupId: widget.groupId,
-                  data: data,
-                ),
-              ),
-            );
-          },
-        ),
       if (hasText)
         IconButton(
           tooltip: 'Copy',
           icon: const Icon(Icons.copy_outlined, color: Colors.black),
           onPressed: _copySelected,
         ),
-      if (canEdit && _isMember)
+      if (_isMember)
         IconButton(
-          tooltip: 'Edit',
-          icon: const Icon(Icons.edit_outlined, color: Colors.black),
-          onPressed: _startEdit,
+          tooltip: allPinned ? 'Unpin' : 'Pin',
+          icon: Icon(
+            allPinned ? Icons.push_pin : Icons.push_pin_outlined,
+            color: Colors.black,
+          ),
+          onPressed: _togglePinSelected,
         ),
       if (_isMember)
         IconButton(
@@ -731,7 +782,174 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           icon: const Icon(Icons.delete_outline, color: Colors.black),
           onPressed: _deleteDialog,
         ),
+      if (menu.isNotEmpty)
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert, color: Colors.black),
+          color: softCardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          onSelected: (v) {
+            switch (v) {
+              case 'forward':
+                _forwardSelected();
+                break;
+              case 'edit':
+                _startEdit();
+                break;
+              case 'info':
+                _openMessageInfo();
+                break;
+            }
+          },
+          itemBuilder: (_) => menu,
+        ),
     ];
+  }
+
+  void _openMessageInfo() {
+    final docs = _selectedDocs;
+    if (docs.length != 1) return;
+    final data = docs.first.data();
+    _clearSelection();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            GroupMessageInfoScreen(groupId: widget.groupId, data: data),
+      ),
+    );
+  }
+
+  Future<void> _forwardSelected() async {
+    final messenger = ScaffoldMessenger.of(context);
+    // _docs naye pehle hain, forward ke liye purane pehle chahiye
+    final texts = _selectedDocs.reversed
+        .where((d) =>
+    d.data()['deletedForAll'] != true && d.data()['type'] == 'text')
+        .map((d) => (d.data()['text'] as String?) ?? '')
+        .where((t) => t.trim().isNotEmpty)
+        .toList();
+
+    if (texts.isEmpty) {
+      _clearSelection();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Only text messages can be forwarded')),
+      );
+      return;
+    }
+
+    final sent = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => ForwardToScreen(texts: texts)),
+    );
+    if (!mounted) return;
+    if (sent == true) {
+      _clearSelection();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(texts.length == 1
+              ? 'Message forwarded'
+              : '${texts.length} messages forwarded'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _togglePinSelected() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final docs = _selectedDocs;
+    if (docs.isEmpty) return;
+
+    final unpin = docs.every((d) => d.data()['pinned'] == true);
+    if (!unpin) {
+      if (docs.any((d) =>
+      d.data()['deletedForAll'] == true || d.data()['type'] == 'system')) {
+        _clearSelection();
+        messenger.showSnackBar(
+          const SnackBar(content: Text("You can't pin this message")),
+        );
+        return;
+      }
+      final fresh = docs.where((d) => d.data()['pinned'] != true).length;
+      if (_pinned.length + fresh > 3) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('You can pin up to 3 messages')),
+        );
+        return;
+      }
+    }
+
+    final ids = docs.map((d) => d.id).toList();
+    _clearSelection();
+    try {
+      await groupRepo.setMessagesPinned(
+        groupId: widget.groupId,
+        messageIds: ids,
+        pinned: !unpin,
+      );
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(unpin
+              ? (ids.length == 1 ? 'Message unpinned' : 'Messages unpinned')
+              : (ids.length == 1 ? 'Message pinned' : 'Messages pinned')),
+        ),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not update pin. Try again.')),
+      );
+    }
+  }
+
+  Future<void> _jumpToPinned(String id, int count) async {
+    await _jumpTo(id);
+    if (!mounted) return;
+    if (count > 1) setState(() => _pinIndex = (_pinIndex + 1) % count);
+  }
+
+  Widget _pinBar() {
+    final pins = _pinned;
+    final i = _pinIndex.clamp(0, pins.length - 1);
+    final m = pins[i].data();
+    final body =
+    m['type'] == 'image' ? '📷 Photo' : ((m['text'] as String?) ?? '');
+    final sender = (m['senderName'] as String?) ?? '';
+    final text = sender.isEmpty ? body : '$sender: $body';
+
+    return Material(
+      color: softCardColor,
+      child: InkWell(
+        onTap: () => _jumpToPinned(pins[i].id, pins.length),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.push_pin, size: 18, color: AppColors.gold700),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.brown900,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (pins.length > 1)
+                Text(
+                  '${i + 1}/${pins.length}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.brown700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _reactionBar() {
@@ -814,6 +1032,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                 actions: _selecting ? _msgActions() : const [],
               ),
             ),
+            if (_isMember && _pinned.isNotEmpty) _pinBar(),
             Expanded(child: _messages()),
             _isMember ? _inputBar() : _cantSendBar(),
           ],

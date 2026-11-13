@@ -154,6 +154,7 @@ class GroupRepository {
     required List<String> members,
     required String text,
     Map<String, dynamic>? replyTo,
+    bool forwarded = false,
   }) async {
     final body = text.trim();
     if (body.isEmpty) return;
@@ -165,6 +166,7 @@ class GroupRepository {
         'type': 'text',
         'text': body,
         if (replyTo != null) 'replyTo': replyTo,
+        if (forwarded) 'forwarded': true,
       },
     );
   }
@@ -241,6 +243,40 @@ class GroupRepository {
       'typing.$_uid':
       typing ? FieldValue.serverTimestamp() : FieldValue.delete(),
     });
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> pinnedStream(String groupId) {
+    return _msgs(groupId).where('pinned', isEqualTo: true).snapshots();
+  }
+
+  Future<void> setMessagesPinned({
+    required String groupId,
+    required List<String> messageIds,
+    required bool pinned,
+  }) async {
+    final me = await myName();
+    final batch = _db.batch();
+    for (final id in messageIds) {
+      batch.update(
+        _msgs(groupId).doc(id),
+        pinned
+            ? {
+          'pinned': true,
+          'pinnedAt': FieldValue.serverTimestamp(),
+          'pinnedBy': _uid,
+        }
+            : {'pinned': false},
+      );
+    }
+    if (pinned) {
+      batch.set(
+        _msgs(groupId).doc(),
+        _system(messageIds.length == 1
+            ? '$me pinned a message'
+            : '$me pinned ${messageIds.length} messages'),
+      );
+    }
+    await batch.commit();
   }
 
   // -------------------------------------------------------------------------
