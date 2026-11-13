@@ -15,6 +15,7 @@ import '../message_widgets.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'group_info_screen.dart';
+import 'group_message_info_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
   final String groupId;
@@ -45,6 +46,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   late String _photoUrl = widget.photoUrl;
   Map<String, dynamic> _group = {};
   bool _isMember = true;
+  String _leftBy = ''; // '' = khud chhoda, warna remove karne wale ka naam
+  Timestamp? _msgBefore;
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _groupSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _msgSub;
@@ -125,7 +128,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       _msgSub?.cancel();
       _msgSub = null;
       setState(() {
-        _isMember = false;
+        _failed = true;
         _loaded = true;
       });
       return;
@@ -133,17 +136,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
     final members = List<String>.from(data['members'] ?? const []);
     final member = members.contains(_myUid);
+    final leftAtMap = data['leftAt'];
+    final leftByMap = data['leftBy'];
+    final leftAt = leftAtMap is Map ? leftAtMap[_myUid] : null;
+
     setState(() {
       _group = data;
       _name = (data['name'] as String?) ?? _name;
       _photoUrl = (data['photoUrl'] as String?) ?? _photoUrl;
       _isMember = member;
+      _leftBy = (!member && leftByMap is Map)
+          ? ((leftByMap[_myUid] as String?) ?? '')
+          : '';
     });
 
     if (!member) {
-      _msgSub?.cancel();
-      _msgSub = null;
-      setState(() => _loaded = true);
+      // access khatam, par purani chat dikhti rahe (chhodne ke waqt tak)
+      if (leftAt is Timestamp) _startMessages(before: leftAt);
       return;
     }
 
@@ -162,9 +171,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  void _startMessages() {
-    if (_msgSub != null) return;
-    _msgSub = groupRepo.messagesStream(widget.groupId).listen(
+  void _startMessages({Timestamp? before}) {
+    if (_msgSub != null && _msgBefore == before) return;
+    _msgSub?.cancel();
+    _msgBefore = before;
+    _msgSub = groupRepo.messagesStream(widget.groupId, before: before).listen(
           (snap) {
         if (!mounted) return;
         setState(() {
@@ -183,6 +194,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       },
     );
   }
+
+
 
   /// Typing / naam dikhane ke liye members ke usernames cache mein le aao
   void _ensureUsers(List<String> members) {
@@ -226,16 +239,36 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   /// Meri join hone ki tareekh se pehle ke messages aur meri taraf se delete kiye hue na dikhao
+  /// Jo messages meri membership ke dauran ke hain wahi dikhao:
+  /// pehli join se pehle ke aur chhodne-se-dobara-add-hone ke beech ke nahi
   List<QueryDocumentSnapshot<Map<String, dynamic>>> get _visible {
     final j = _group['joinedAt'];
     final joined = j is Map ? j[_myUid] : null;
+
+    // [gap shuru (ms), gap khatam (Timestamp)]
+    final gaps = <MapEntry<int, Timestamp>>[];
+    final g = _group['gaps'];
+    if (g is Map && g[_myUid] is Map) {
+      (g[_myUid] as Map).forEach((from, to) {
+        final ms = int.tryParse(from.toString());
+        if (ms != null && to is Timestamp) gaps.add(MapEntry(ms, to));
+      });
+    }
+
     return _docs.where((d) {
       final m = d.data();
       final del = m['deletedFor'];
       if (del is List && del.contains(_myUid)) return false;
-      if (joined is Timestamp) {
-        final c = m['createdAt'];
-        if (c is Timestamp && c.compareTo(joined) < 0) return false;
+
+      final c = m['createdAt'];
+      if (c is Timestamp) {
+        if (joined is Timestamp && c.compareTo(joined) < 0) return false;
+        for (final gap in gaps) {
+          // shuru par "You left / removed" ka message dikhta rahe, ant par "added" ka
+          if (c.millisecondsSinceEpoch > gap.key && c.compareTo(gap.value) < 0) {
+            return false;
+          }
+        }
       }
       return true;
     }).toList();
@@ -244,18 +277,22 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   List<QueryDocumentSnapshot<Map<String, dynamic>>> get _selectedDocs =>
       _visible.where((d) => _selected.contains(d.id)).toList();
 
-  /// Baqi sab members ne ye message dekh liya?
   bool _seenByAll(Timestamp? created) {
     if (created == null) return false;
     final lr = _group['lastRead'];
     if (lr is! Map) return false;
-    final others = _members.where((m) => m != _myUid).toList();
-    if (others.isEmpty) return false;
-    for (final m in others) {
+    final j = _group['joinedAt'];
+    var counted = 0;
+    for (final m in _members) {
+      if (m == _myUid) continue;
+      // jo member message ke baad join hua, uska hisaab nahi
+      final joined = j is Map ? j[m] : null;
+      if (joined is Timestamp && joined.compareTo(created) > 0) continue;
+      counted++;
       final t = lr[m];
       if (t is! Timestamp || t.compareTo(created) < 0) return false;
     }
-    return true;
+    return counted > 0;
   }
 
   bool _isMine(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
@@ -656,6 +693,26 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         ((d.data()['text'] as String?) ?? '').isNotEmpty);
 
     return [
+      if (single != null &&
+          _isMine(single) &&
+          single.data()['type'] != 'system' &&
+          single.data()['deletedForAll'] != true)
+        IconButton(
+          tooltip: 'Info',
+          icon: const Icon(Icons.info_outline, color: Colors.black),
+          onPressed: () {
+            final data = single.data();
+            _clearSelection();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => GroupMessageInfoScreen(
+                  groupId: widget.groupId,
+                  data: data,
+                ),
+              ),
+            );
+          },
+        ),
       if (hasText)
         IconButton(
           tooltip: 'Copy',
@@ -668,11 +725,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           icon: const Icon(Icons.edit_outlined, color: Colors.black),
           onPressed: _startEdit,
         ),
-      IconButton(
-        tooltip: 'Delete',
-        icon: const Icon(Icons.delete_outline, color: Colors.black),
-        onPressed: _deleteDialog,
-      ),
+      if (_isMember)
+        IconButton(
+          tooltip: 'Delete',
+          icon: const Icon(Icons.delete_outline, color: Colors.black),
+          onPressed: _deleteDialog,
+        ),
     ];
   }
 
@@ -765,13 +823,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   Widget _messages() {
-    if (!_isMember && _loaded) {
-      return const EmptyState(
-        icon: Icons.lock_outline,
-        title: 'You are no longer a member',
-        subtitle: "You can't see or send messages in this group.",
-      );
-    }
+
     if (_failed) {
       return const EmptyState(
         icon: Icons.error_outline,
@@ -909,6 +961,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   }
 
   Widget _cantSendBar() {
+    final text = _leftBy.isEmpty
+        ? 'You left this group'
+        : 'You were removed by $_leftBy';
     return Container(
       color: AppColors.cream,
       child: SafeArea(
@@ -917,13 +972,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
-            children: const [
-              Icon(Icons.block, size: 18, color: AppColors.brown700),
-              SizedBox(width: 8),
+            children: [
+              const Icon(Icons.block, size: 18, color: AppColors.brown700),
+              const SizedBox(width: 8),
               Flexible(
                 child: Text(
-                  "You can't send messages to this group",
-                  style: TextStyle(
+                  text,
+                  style: const TextStyle(
                     color: AppColors.brown700,
                     fontWeight: FontWeight.w600,
                   ),

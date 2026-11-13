@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'notification_service.dart';
 import 'presence_service.dart';
 
 class UsernameTakenException implements Exception {
@@ -153,6 +154,7 @@ class AuthRepository {
     try {
       await GoogleSignIn.instance.signOut();
     } catch (_) {}
+    await NotificationService.instance.removeToken();
     await _auth.signOut();
   }
 }

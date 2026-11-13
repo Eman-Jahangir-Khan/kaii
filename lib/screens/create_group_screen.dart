@@ -8,6 +8,7 @@ import '../group_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'group_chat_screen.dart';
+import '../image_helper.dart';
 
 class CreateGroupScreen extends StatefulWidget {
   const CreateGroupScreen({super.key});
@@ -18,7 +19,6 @@ class CreateGroupScreen extends StatefulWidget {
 
 class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final _name = TextEditingController();
-  final _picker = ImagePicker();
 
   List<Map<String, dynamic>> _contacts = [];
   final Set<String> _selected = {};
@@ -62,12 +62,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   }
 
   Future<void> _pickPhoto() async {
-    final p = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 70,
-      maxWidth: 800,
-    );
-    if (p != null && mounted) setState(() => _photo = p);
+    final path = await pickSquareImage();
+    if (path != null && mounted) setState(() => _photo = XFile(path));
   }
 
   bool get _canCreate =>

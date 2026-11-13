@@ -39,6 +39,12 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  Widget _tab(int i, Widget child) => _TabFade(
+    controller: _pageCtrl,
+    index: i,
+    child: _KeepAlive(child: child),
+  );
+
   static const _icons = <IconData>[
     Icons.chat_bubble_outline_rounded,
     Icons.groups_outlined,
@@ -61,19 +67,40 @@ class _MainShellState extends State<MainShell> {
         child: Scaffold(
       backgroundColor: AppColors.cream,
       // IndexedStack: tab badalne par purani tab ki halat (search wagaira) bani rehti hai
-      body: PageView(
-        controller: _pageCtrl,
-        onPageChanged: (i) => setState(() => _index = i),
-        children: const [
-          _KeepAlive(child: HomeScreen()),
-          _KeepAlive(child: GroupsScreen()),
-          _KeepAlive(
-            child: _ComingSoonTab(
-                title: 'Status', icon: Icons.donut_large_rounded),
+          body: Stack(
+            children: [
+              // header ke peeche fixed gradient (header ki unchai = status bar + 72)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: media.padding.top + 72,
+                child: const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                      colors: [Color(0xFFA67917), Color(0xFFE8B84A)],
+                    ),
+                  ),
+                ),
+              ),
+              PageView(
+                controller: _pageCtrl,
+                onPageChanged: (i) => setState(() => _index = i),
+                children: [
+                  _tab(0, const HomeScreen()),
+                  _tab(1, const GroupsScreen()),
+                  _tab(
+                    2,
+                    const _ComingSoonTab(
+                        title: 'Status', icon: Icons.donut_large_rounded),
+                  ),
+                  _tab(3, const ProfileScreen()),
+                ],
+              ),
+            ],
           ),
-          _KeepAlive(child: ProfileScreen()),
-        ],
-      ),
       // keyboard khulne par bar chhupa do taake jagah na ghire
       bottomNavigationBar: keyboardOpen
           ? null
@@ -88,6 +115,33 @@ class _MainShellState extends State<MainShell> {
         ),
       ),
         ), );
+  }
+}
+
+class _TabFade extends StatelessWidget {
+  final PageController controller;
+  final int index;
+  final Widget child;
+  const _TabFade({
+    required this.controller,
+    required this.index,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      child: child,
+      builder: (context, child) {
+        double page = index.toDouble();
+        if (controller.hasClients && controller.position.haveDimensions) {
+          page = controller.page ?? page;
+        }
+        final t = (1 - (page - index).abs()).clamp(0.0, 1.0);
+        return Opacity(opacity: t, child: child);
+      },
+    );
   }
 }
 

@@ -513,6 +513,13 @@ class ChatRepository {
     if (c != null) _userCache[_uid] = {...c, 'hidePresence': hide};
   }
 
+  /// Meri profile photo badlo ('' = hata do)
+  Future<void> setMyPhoto(String url) async {
+    await _db.collection('users').doc(_uid).update({'photoUrl': url});
+    final c = _userCache[_uid];
+    if (c != null) _userCache[_uid] = {...c, 'photoUrl': url};
+  }
+
   /// Mera typing status is chat mein likho / hatao
   Future<void> setTyping(String chatId, bool typing) {
     return _db.collection('chats').doc(chatId).update({

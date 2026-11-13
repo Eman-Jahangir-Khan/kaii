@@ -4,13 +4,14 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+
 
 import '../chat_repository.dart';
 import '../cloudinary_service.dart';
 import '../group_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../image_helper.dart';
 
 /// Pop result: true = main ne group chhod diya (chat screen bhi band ho jaye)
 class GroupInfoScreen extends StatefulWidget {
@@ -23,7 +24,7 @@ class GroupInfoScreen extends StatefulWidget {
 
 class _GroupInfoScreenState extends State<GroupInfoScreen> {
   final String _myUid = FirebaseAuth.instance.currentUser!.uid;
-  final _picker = ImagePicker();
+
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
   Map<String, dynamic> _group = {};
@@ -132,14 +133,10 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   }
 
   Future<void> _changePhoto() async {
-    final p = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 70,
-      maxWidth: 800,
-    );
-    if (p == null) return;
+    final path = await pickSquareImage();
+    if (path == null) return;
     await _run(() async {
-      final r = await cloudinary.uploadImage(File(p.path));
+      final r = await cloudinary.uploadImage(File(path));
       await groupRepo.updateInfo(
         groupId: widget.groupId,
         photoUrl: r['url'] as String,

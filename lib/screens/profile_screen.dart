@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -5,6 +8,9 @@ import '../auth_repository.dart';
 import '../chat_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../cloudinary_service.dart';
+import '../image_helper.dart';
+import '../photo_viewer.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -19,6 +25,80 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late final Future<Map<String, dynamic>?> _future = chatRepo.getUser(_uid);
 
   bool? _showPresence; // null = Firestore ki value use hogi
+  String? _photoOverride; // nayi photo ('' = hata di gayi)
+  bool _uploading = false;
+
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _changePhoto(ImageSource source) async {
+    final path = await pickSquareImage(source: source);
+    if (path == null) return;
+    setState(() => _uploading = true);
+    try {
+      final r = await cloudinary.uploadImage(File(path));
+      final url = r['url'] as String;
+      await chatRepo.setMyPhoto(url);
+      if (mounted) setState(() => _photoOverride = url);
+    } catch (e) {
+      debugPrint('PROFILE PHOTO ERROR: $e');
+      _snack('Could not update photo. Try again.');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _removePhoto() async {
+    setState(() => _uploading = true);
+    try {
+      await chatRepo.setMyPhoto('');
+      if (mounted) setState(() => _photoOverride = '');
+    } catch (_) {
+      _snack('Could not remove photo. Try again.');
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _photoSheet(bool hasPhoto) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Gallery'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _changePhoto(ImageSource.gallery);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('Camera'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _changePhoto(ImageSource.camera);
+              },
+            ),
+            if (hasPhoto)
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('Remove photo',
+                    style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _removePhoto();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> _togglePresence(bool show) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -94,7 +174,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         data == null;
                 final username = (data?['username'] as String?) ?? '';
                 final name = (data?['name'] as String?) ?? '';
-                final photo = (data?['photoUrl'] as String?) ?? '';
+                final photo =
+                    _photoOverride ?? ((data?['photoUrl'] as String?) ?? '');
                 final shownName = name.isNotEmpty ? name : username;
                 final showPresence =
                     _showPresence ?? (data?['hidePresence'] != true);
@@ -103,10 +184,56 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
                   children: [
                     Center(
-                      child: UserAvatar(
-                        username: shownName,
-                        photoUrl: photo,
-                        size: 110,
+                      child: Stack(
+                        children: [
+                          GestureDetector(
+                            onTap: photo.isEmpty
+                                ? null
+                                : () => openFullPhoto(
+                              context,
+                              title: shownName,
+                              photoUrl: photo,
+                            ),
+                            child: UserAvatar(
+                              username: shownName,
+                              photoUrl: photo,
+                              size: 110,
+                            ),
+                          ),
+                          if (_uploading)
+                            Positioned.fill(
+                              child: Container(
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.black38,
+                                ),
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                    color: AppColors.cream,
+                                    strokeWidth: 3,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: GestureDetector(
+                              onTap: (_uploading || loading)
+                                  ? null
+                                  : () => _photoSheet(photo.isNotEmpty),
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: const BoxDecoration(
+                                  color: AppColors.gold700,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.camera_alt,
+                                    size: 18, color: AppColors.cream),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 16),

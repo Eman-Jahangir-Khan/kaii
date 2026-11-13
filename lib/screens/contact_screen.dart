@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../chat_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../photo_viewer.dart';
 
 class ContactScreen extends StatelessWidget {
   final String uid;
@@ -41,10 +42,19 @@ class ContactScreen extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(16, 28, 16, 32),
                   children: [
                     Center(
-                      child: UserAvatar(
-                        username: username,
-                        photoUrl: photoUrl,
-                        size: 120,
+                      child: GestureDetector(
+                        onTap: photoUrl.isEmpty
+                            ? null
+                            : () => openFullPhoto(
+                          context,
+                          title: username,
+                          photoUrl: photoUrl,
+                        ),
+                        child: UserAvatar(
+                          username: username,
+                          photoUrl: photoUrl,
+                          size: 120,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),

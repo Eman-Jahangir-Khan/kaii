@@ -1,16 +1,21 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+
 
 import '../auth_repository.dart';
 import '../chat_repository.dart';
+import '../notification_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import '../presence_service.dart';
 import 'chat_screen.dart';
 import 'new_chat_screen.dart';
 import 'requests_screen.dart';
+import '../photo_viewer.dart';
+import 'contact_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -38,7 +43,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    presenceService.start();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      NotificationService.instance.init(user.uid);
+    }
+      presenceService.start();
     _sub = chatRepo.chatsStream().listen(
       _onSnapshot,
       onError: (_) {
@@ -791,7 +800,35 @@ class _ChatTileState extends State<_ChatTile> {
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    UserAvatar(username: username, photoUrl: photo, size: 52),
+                    GestureDetector(
+                      // selection mode mein avatar tap bhi tile ki tarah chalega
+                      onTap: widget.onTap ??
+                              () => showPhotoCard(
+                            context,
+                            name: username,
+                            photoUrl: photo,
+                            onMessage: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => ChatScreen(
+                                  otherUid: _otherUid,
+                                  username: username,
+                                  photoUrl: photo,
+                                ),
+                              ),
+                            ),
+                            onInfo: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => ContactScreen(
+                                  uid: _otherUid,
+                                  username: username,
+                                  photoUrl: photo,
+                                ),
+                              ),
+                            ),
+                          ),
+                      child: UserAvatar(
+                          username: username, photoUrl: photo, size: 52),
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(

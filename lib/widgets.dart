@@ -772,9 +772,11 @@ class GradientHeader extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    if (showBack)
+                ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: Row(
+                      children: [
+                        if (showBack)
                       IconButton(
                         icon: const Icon(
                           Icons.arrow_back_ios_new,
@@ -815,8 +817,9 @@ class GradientHeader extends StatelessWidget {
                         ],
                       ),
                     ),
-                    ...actions,
-                  ],
+                        ...actions,
+                      ],
+                    ),
                 ),
                 if (bottom != null) ...[
                   const SizedBox(height: 16),

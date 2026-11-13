@@ -76,7 +76,7 @@ class GroupRepository {
   /// (pehli baar console mein index banane ka link aayega — ek baar bana lena)
   Stream<QuerySnapshot<Map<String, dynamic>>> groupsStream() {
     return _groups
-        .where('members', arrayContains: _uid)
+        .where('everMembers', arrayContains: _uid)
         .orderBy('lastMessageAt', descending: true)
         .snapshots();
   }
@@ -90,11 +90,13 @@ class GroupRepository {
   Stream<QuerySnapshot<Map<String, dynamic>>> messagesStream(
       String groupId, {
         int limit = 50,
+        Timestamp? before,
       }) {
-    return _msgs(groupId)
-        .orderBy('createdAt', descending: true)
-        .limit(limit)
-        .snapshots();
+    var q = _msgs(groupId).orderBy('createdAt', descending: true);
+    if (before != null) {
+      q = q.where('createdAt', isLessThanOrEqualTo: before);
+    }
+    return q.limit(limit).snapshots();
   }
 
   // -------------------------------------------------------------------------
@@ -127,7 +129,9 @@ class GroupRepository {
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastSenderId': '',
       'lastSenderName': '',
+      'everMembers': members,
     });
+
     batch.set(ref.collection('messages').doc(), _system(text));
     await batch.commit();
     return ref.id;
@@ -309,6 +313,7 @@ class GroupRepository {
   // -------------------------------------------------------------------------
 
   /// users: [{uid, username}, ...]
+  /// users: [{uid, username}, ...]
   Future<void> addMembers({
     required String groupId,
     required List<Map<String, dynamic>> users,
@@ -317,13 +322,29 @@ class GroupRepository {
     final me = await myName();
     final names = users.map((u) => u['username'] ?? '').join(', ');
     final text = '$me added $names';
+    final uids = users.map((u) => u['uid'] as String).toList();
+
+    // pehle ka record: kaun kab chhod chuka / kab pehli bar join hua
+    final data = (await _groups.doc(groupId).get()).data() ?? {};
+    final leftAt = data['leftAt'] is Map ? data['leftAt'] as Map : const {};
+    final joinedAt =
+    data['joinedAt'] is Map ? data['joinedAt'] as Map : const {};
 
     final batch = _db.batch();
     batch.update(_groups.doc(groupId), {
-      'members': FieldValue.arrayUnion(users.map((u) => u['uid']).toList()),
-      for (final u in users) ...{
-        'joinedAt.${u['uid']}': FieldValue.serverTimestamp(),
-        'unread.${u['uid']}': 0,
+      'members': FieldValue.arrayUnion(uids),
+      'everMembers': FieldValue.arrayUnion(uids),
+      for (final uid in uids) ...{
+        // pehli join ki tareekh wahi rahe, naya sirf bilkul naye member ke liye
+        if (joinedAt[uid] is! Timestamp)
+          'joinedAt.$uid': FieldValue.serverTimestamp(),
+        // dobara add ho raha hai: chhodne se ab tak ka gap record karo
+        if (leftAt[uid] is Timestamp)
+          'gaps.$uid.${(leftAt[uid] as Timestamp).millisecondsSinceEpoch}':
+          FieldValue.serverTimestamp(),
+        'unread.$uid': 0,
+        'leftAt.$uid': FieldValue.delete(),
+        'leftBy.$uid': FieldValue.delete(),
       },
       'lastMessage': text,
       'lastMessageAt': FieldValue.serverTimestamp(),
@@ -345,6 +366,8 @@ class GroupRepository {
     batch.update(_groups.doc(groupId), {
       'members': FieldValue.arrayRemove([uid]),
       'admins': FieldValue.arrayRemove([uid]),
+      'leftAt.$uid': FieldValue.serverTimestamp(),
+      'leftBy.$uid': me, // kis ne remove kiya
       'lastMessage': text,
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastSenderId': '',
@@ -419,6 +442,12 @@ class GroupRepository {
     batch.update(ref, {
       'members': FieldValue.arrayRemove([_uid]),
       'admins': FieldValue.arrayRemove([_uid]),
+      'leftAt.$_uid': FieldValue.serverTimestamp(),
+      'leftBy.$_uid': '', // khali = khud chhoda
+      'lastMessage': '$me left',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+      'lastSenderId': '',
+      'lastSenderName': '',
     });
     await batch.commit();
   }
