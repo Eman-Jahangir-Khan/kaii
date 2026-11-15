@@ -76,6 +76,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
       final who = by is Map ? ((by[_myUid] as String?) ?? '') : '';
       return who.isEmpty ? 'You left' : 'You were removed by $who';
     }
+    // delete for me ke baad meri apni preview (jab tak koi naya message na aaye)
+    final mp = g['myPreview'];
+    if (mp is Map) {
+      final p = mp[_myUid];
+      if (p is Map && p['base'] == g['lastMessageAt']) {
+        final text = (p['text'] as String?) ?? '';
+        final sid = (p['senderId'] as String?) ?? '';
+        final sname = (p['senderName'] as String?) ?? '';
+        if (text.isEmpty) return '';
+        if (sid.isEmpty) return text;
+        if (sid == _myUid) return 'You: $text';
+        return sname.isEmpty ? text : '$sname: $text';
+      }
+    }
     final msg = (g['lastMessage'] as String?) ?? '';
     final senderId = (g['lastSenderId'] as String?) ?? '';
     final senderName = (g['lastSenderName'] as String?) ?? '';

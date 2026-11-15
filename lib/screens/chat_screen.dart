@@ -14,6 +14,8 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'contact_screen.dart';
 import 'forward_to_screen.dart';
+import '../status_repository.dart';
+import 'status_viewer_screen.dart';
 
 class _ChatBg {
   final String key;
@@ -863,6 +865,29 @@ class _ChatScreenState extends State<ChatScreen> {
   void _cancelReply() {
     if (_replyTo == null) return;
     setState(() => _replyTo = null);
+  }
+
+  Future<void> _openStatusFromReply(String statusId) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final nav = Navigator.of(context);
+    final item = await statusRepo.getActive(statusId);
+    if (!mounted) return;
+    if (item == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('This status is no longer available')),
+      );
+      return;
+    }
+    final mine = item.ownerId == _myUid;
+    nav.push(
+      MaterialPageRoute(
+        builder: (_) => StatusViewerScreen(
+          ownerIds: [item.ownerId],
+          groups: {item.ownerId: [item]},
+          isMine: mine,
+        ),
+      ),
+    );
   }
 
   /// Quote par tap karne par original message tak scroll + 1 second highlight
@@ -1761,12 +1786,19 @@ class _ChatScreenState extends State<ChatScreen> {
                           highlight: _searchQuery,
                           current: doc.id == currentId,
                           replyName: (m['replyTo'] is Map &&
+                              (m['replyTo'] as Map)['isStatus'] == true)
+                              ? 'Status'
+                              : (m['replyTo'] is Map &&
                               (m['replyTo'] as Map)['senderId'] == _myUid)
                               ? 'You'
                               : widget.username,
-                          onReplyTap: m['replyTo'] is Map
-                              ? () => _jumpToMessage((m['replyTo'] as Map)['id'] as String)
-                              : null,
+                          onReplyTap: m['replyTo'] is! Map
+                              ? null
+                              : (m['replyTo'] as Map)['isStatus'] == true
+                              ? () => _openStatusFromReply(
+                              (m['replyTo'] as Map)['id'] as String)
+                              : () => _jumpToMessage(
+                              (m['replyTo'] as Map)['id'] as String),
                         ),
                       ),
                       if (m['reactions'] is Map &&
@@ -2221,37 +2253,46 @@ class _Bubble extends StatelessWidget {
                       padding: const EdgeInsets.only(bottom: 6),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
-                          decoration: BoxDecoration(
-                            color: (mine ? Colors.black : AppColors.gold500)
-                                .withValues(alpha: 0.15),
-                            border: Border(
-                              left: BorderSide(
-                                color: mine ? AppColors.cream : AppColors.gold700,
-                                width: 3,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    replyName,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: mine ? AppColors.cream : AppColors.gold700,
+                                    ),
+                                  ),
+                                  Text(
+                                    ((data['replyTo'] as Map)['text'] as String?) ?? '',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 13, color: meta),
+                                  ),
+                                ],
                               ),
                             ),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                replyName,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: mine ? AppColors.cream : AppColors.gold700,
+                            if ((((data['replyTo'] as Map)['thumb']) as String?)
+                                ?.isNotEmpty ??
+                                false) ...[
+                              const SizedBox(width: 8),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: CachedNetworkImage(
+                                  imageUrl: (data['replyTo'] as Map)['thumb'] as String,
+                                  width: 42,
+                                  height: 42,
+                                  fit: BoxFit.cover,
+                                  errorWidget: (_, __, ___) =>
+                                  const SizedBox(width: 42, height: 42),
                                 ),
                               ),
-                              Text(
-                                ((data['replyTo'] as Map)['text'] as String?) ?? '',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 13, color: meta),
-                              ),
                             ],
-                          ),
+                          ],
                         ),
                       ),
                     ),

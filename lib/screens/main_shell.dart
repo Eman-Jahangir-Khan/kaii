@@ -7,6 +7,7 @@ import '../widgets.dart';
 import 'groups_screen.dart';
 import 'home_screen.dart';
 import 'profile_screen.dart';
+import 'status_screen.dart';
 
 /// 4 tabs + animated bottom bar
 class MainShell extends StatefulWidget {
@@ -91,11 +92,7 @@ class _MainShellState extends State<MainShell> {
                 children: [
                   _tab(0, const HomeScreen()),
                   _tab(1, const GroupsScreen()),
-                  _tab(
-                    2,
-                    const _ComingSoonTab(
-                        title: 'Status', icon: Icons.donut_large_rounded),
-                  ),
+                  _tab(2, const StatusScreen()),
                   _tab(3, const ProfileScreen()),
                 ],
               ),

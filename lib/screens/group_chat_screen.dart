@@ -621,6 +621,13 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
+  String _previewText(Map<String, dynamic>? m) {
+    if (m == null) return '';
+    if (m['deletedForAll'] == true) return 'This message was deleted';
+    if (m['type'] == 'image') return '📷 Photo';
+    return (m['text'] as String?) ?? '';
+  }
+
   Future<void> _deleteDialog() async {
     final docs = _selectedDocs;
     if (docs.isEmpty) return;
@@ -668,10 +675,29 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
           updateLastMessage: isLast,
         );
       } else {
+        // delete se pehle dekh lo: sab se naya (mujhe nazar aane wala) message delete ho raha hai?
+        final vis = _visible; // naye pehle
+        final base = _group['lastMessageAt'] as Timestamp?;
+        final newestDeleted = vis.isNotEmpty && ids.contains(vis.first.id);
+        final remaining = vis.where((d) => !ids.contains(d.id)).toList();
+
         await groupRepo.deleteMessagesForMe(
           groupId: widget.groupId,
           messageIds: ids,
         );
+
+        if (newestDeleted && base != null) {
+          final next = remaining.isEmpty ? null : remaining.first.data();
+          await groupRepo.setMyPreview(
+            groupId: widget.groupId,
+            base: base,
+            text: _previewText(next),
+            senderId: (next == null || next['type'] == 'system')
+                ? ''
+                : ((next['senderId'] as String?) ?? ''),
+            senderName: (next?['senderName'] as String?) ?? '',
+          );
+        }
       }
     } catch (_) {
       messenger.showSnackBar(

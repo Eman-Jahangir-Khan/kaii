@@ -293,6 +293,24 @@ class GroupRepository {
         .update({'reactions.$_uid': emoji ?? FieldValue.delete()});
   }
 
+  /// Groups list ki tile ke liye meri taraf ka last message (delete for me ke baad)
+  Future<void> setMyPreview({
+    required String groupId,
+    required Timestamp base,
+    required String text,
+    required String senderId,
+    required String senderName,
+  }) {
+    return _groups.doc(groupId).update({
+      'myPreview.$_uid': {
+        'base': base,
+        'text': text,
+        'senderId': senderId,
+        'senderName': senderName,
+      },
+    });
+  }
+
   Future<void> editMessage({
     required String groupId,
     required String messageId,
