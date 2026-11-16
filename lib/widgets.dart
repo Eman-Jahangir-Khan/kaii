@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'theme.dart';
 
@@ -963,6 +965,77 @@ class GoogleButton extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+
+class RequestButton extends StatelessWidget {
+  const RequestButton({
+    super.key,
+    required this.otherUid,
+    required this.onOpenChat, // yahan apni ChatScreen kholo
+  });
+
+  final String otherUid;
+  final VoidCallback onOpenChat;
+
+  @override
+  Widget build(BuildContext context) {
+    final me = FirebaseAuth.instance.currentUser!.uid;
+    final ids = [me, otherUid]..sort(); // rules mein participants[0]_participants[1]
+    final ref = FirebaseFirestore.instance
+        .collection('chats')
+        .doc('${ids[0]}_${ids[1]}');
+
+    Widget filled(String label, VoidCallback onTap) =>
+        ElevatedButton(onPressed: onTap, child: Text(label));
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: ref.snapshots(),
+      builder: (context, snap) {
+        if (!snap.hasData) return const SizedBox(height: 48);
+        final data = snap.data!.data();
+        final status = data == null ? null : (data['status'] ?? 'accepted');
+        final requestedBy = data?['requestedBy'];
+
+        void sendRequest() => data == null
+            ? ref.set({
+          'participants': ids,
+          'status': 'pending',
+          'requestedBy': me,
+          'createdAt': FieldValue.serverTimestamp(),
+        })
+            : ref.update({'status': 'pending', 'requestedBy': me});
+
+        if (status == null) return filled('Request', sendRequest);
+        if (status == 'accepted') return filled('Message', onOpenChat);
+
+        if (status == 'pending') {
+          if (requestedBy == me) {
+            return OutlinedButton(
+              onPressed: () => ref.delete(),
+              child: const Text('Cancel request'),
+            );
+          }
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              filled('Accept', () => ref.update({'status': 'accepted'})),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () => ref.update({'status': 'rejected'}),
+                child: const Text('Reject'),
+              ),
+            ],
+          );
+        }
+
+        // rejected
+        return requestedBy == me
+            ? const Text('Request declined')
+            : filled('Request', sendRequest);
+      },
     );
   }
 }

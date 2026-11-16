@@ -84,6 +84,28 @@ class _NewChatScreenState extends State<NewChatScreen> {
     );
   }
 
+  Future<void> _cancelRequest(String uid) async {
+    if (_busy.contains(uid)) return;
+    setState(() => _busy.add(uid));
+    try {
+      await chatRepo.cancelRequest(uid);
+      if (!mounted) return;
+      setState(() {
+        _links[uid] = ChatLink.none; // wapis "Request" button aa jayega
+        _busy.remove(uid);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Request cancelled')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _busy.remove(uid));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not cancel request. Try again.')),
+      );
+    }
+  }
+
 
   Future<void> _onUserTap(Map<String, dynamic> user) async {
     final uid = user['uid'] as String;
@@ -156,15 +178,34 @@ class _NewChatScreenState extends State<NewChatScreen> {
       ),
     );
 
+    Widget outlined(String label, VoidCallback onTap) => GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          border: Border.all(color: AppColors.gold700, width: 1.5),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.gold700,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+
     switch (_links[uid] ?? ChatLink.none) {
       case ChatLink.accepted:
-        return const Icon(Icons.chevron_right, color: AppColors.gold700);
+        return pill('Message');            // pehle: chevron_right icon tha
       case ChatLink.none:
         return pill('Request');
       case ChatLink.requestReceived:
         return pill('Accept');
       case ChatLink.requestSent:
-        return muted('Requested');
+        return outlined('Cancel', () => _cancelRequest(uid));   // pehle: muted('Requested')
       case ChatLink.declined:
         return muted('Declined');
     }

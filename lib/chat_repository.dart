@@ -435,6 +435,15 @@ class ChatRepository {
     await batch.commit();
   }
 
+  Future<void> cancelRequest(String otherUid) async {
+    final me = FirebaseAuth.instance.currentUser!.uid;
+    final ids = [me, otherUid]..sort();
+    await FirebaseFirestore.instance
+        .collection('chats')
+        .doc('${ids[0]}_${ids[1]}')
+        .delete();
+  }
+
   /// Chat kholne par: samne wale ke unread messages read mark karo
   /// aur apna unread counter 0 karo
   Future<void> markChatRead({

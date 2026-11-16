@@ -226,6 +226,48 @@ class GroupRepository {
     await batch.commit();
   }
 
+  Future<void> setPinned(String groupId, bool pinned) {
+    return _groups.doc(groupId).update({
+      'pinnedBy': pinned
+          ? FieldValue.arrayUnion([_uid])
+          : FieldValue.arrayRemove([_uid]),
+    });
+  }
+
+  Future<void> setMarkedUnread(String groupId, bool marked) {
+    return _groups.doc(groupId).update({
+      'markedUnread': marked
+          ? FieldValue.arrayUnion([_uid])
+          : FieldValue.arrayRemove([_uid]),
+    });
+  }
+
+  /// Group meri list se hatao (sirf meri taraf se). Wapis add hone par naye messages hi dikhenge.
+  Future<void> deleteGroupForMe(String groupId) {
+    return _groups.doc(groupId).update({
+      'deletedAt.$_uid': FieldValue.serverTimestamp(),
+      'unread.$_uid': 0,
+      'pinnedBy': FieldValue.arrayRemove([_uid]),
+      'markedUnread': FieldValue.arrayRemove([_uid]),
+    });
+  }
+
+  /// Is group ka background rang (sirf mere liye). null = default
+  Future<void> setChatTheme(String groupId, String? key) {
+    return _groups.doc(groupId).update({
+      'chatTheme.$_uid': key ?? FieldValue.delete(),
+    });
+  }
+
+  /// Group ke messages sirf meri taraf se clear karo (group list mein rahega)
+  Future<void> clearChatForMe(String groupId) {
+    return _groups.doc(groupId).update({
+      'clearedAt.$_uid': FieldValue.serverTimestamp(),
+      'unread.$_uid': 0,
+      'markedUnread': FieldValue.arrayRemove([_uid]),
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Read / typing
   // -------------------------------------------------------------------------
@@ -235,6 +277,7 @@ class GroupRepository {
     return _groups.doc(groupId).update({
       'unread.$_uid': 0,
       'lastRead.$_uid': FieldValue.serverTimestamp(),
+      'markedUnread': FieldValue.arrayRemove([_uid]),
     });
   }
 
@@ -399,6 +442,7 @@ class GroupRepository {
         'unread.$uid': 0,
         'leftAt.$uid': FieldValue.delete(),
         'leftBy.$uid': FieldValue.delete(),
+        'leftSnapshot.$uid': FieldValue.delete(),
       },
       'lastMessage': text,
       'lastMessageAt': FieldValue.serverTimestamp(),
@@ -415,13 +459,21 @@ class GroupRepository {
     required String username,
   }) async {
     final me = await myName();
+    final data = (await _groups.doc(groupId).get()).data() ?? {};
     final text = '$me removed $username';
+
     final batch = _db.batch();
     batch.update(_groups.doc(groupId), {
       'members': FieldValue.arrayRemove([uid]),
       'admins': FieldValue.arrayRemove([uid]),
       'leftAt.$uid': FieldValue.serverTimestamp(),
       'leftBy.$uid': me, // kis ne remove kiya
+      'leftSnapshot.$uid': {
+        'name': data['name'] ?? '',
+        'photoUrl': data['photoUrl'] ?? '',
+        'members': List<String>.from(data['members'] ?? const []),
+        'admins': List<String>.from(data['admins'] ?? const []),
+      },
       'lastMessage': text,
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastSenderId': '',
@@ -473,6 +525,7 @@ class GroupRepository {
   }
 
   /// Group chhodo. Akela admin ho aur doosre members hon to unme se ek admin ban jata hai.
+  /// Group chhodo. Akela admin ho aur doosre members hon to unme se ek admin ban jata hai.
   Future<void> leaveGroup(String groupId) async {
     final me = await myName();
     final ref = _groups.doc(groupId);
@@ -483,22 +536,32 @@ class GroupRepository {
     final admins = List<String>.from(data['admins'] ?? const []);
     final others = members.where((m) => m != _uid).toList();
     final otherAdmins = admins.where((a) => a != _uid).toList();
+    final snapAdmins = [...admins];
 
-    // Pehle (jab tak main admin hoon) naya admin bana do, warna group be-admin reh jayega
+    // Pehle (jab tak main admin hoon) naya admin bana do
     if (admins.contains(_uid) && otherAdmins.isEmpty && others.isNotEmpty) {
       await ref.update({
         'admins': FieldValue.arrayUnion([others.first]),
       });
+      snapAdmins.add(others.first);
     }
 
+    final text = '$me left';
     final batch = _db.batch();
-    batch.set(_msgs(groupId).doc(), _system('$me left'));
+    batch.set(_msgs(groupId).doc(), _system(text));
     batch.update(ref, {
       'members': FieldValue.arrayRemove([_uid]),
       'admins': FieldValue.arrayRemove([_uid]),
       'leftAt.$_uid': FieldValue.serverTimestamp(),
       'leftBy.$_uid': '', // khali = khud chhoda
-      'lastMessage': '$me left',
+      // chhodte waqt ki halat (info screen ke liye)
+      'leftSnapshot.$_uid': {
+        'name': data['name'] ?? '',
+        'photoUrl': data['photoUrl'] ?? '',
+        'members': members,
+        'admins': snapAdmins,
+      },
+      'lastMessage': text,
       'lastMessageAt': FieldValue.serverTimestamp(),
       'lastSenderId': '',
       'lastSenderName': '',

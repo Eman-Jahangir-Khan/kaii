@@ -15,6 +15,10 @@ import '../widgets.dart';
 
 const _imageSeconds = 5;
 
+/// true  = right swipe par agla status, left swipe par pichla
+/// false = WhatsApp jaisa (left swipe par agla, right swipe par pichla)
+const _swipeRightGoesNext = false;
+
 DateTime _timeOf(StatusItem i) =>
     i.createdAt ?? i.expiresAt.subtract(statusLifetime);
 
@@ -64,6 +68,7 @@ class _StatusViewerScreenState extends State<StatusViewerScreen>
   int _token = 0; // purane async kaam ko ignore karne ke liye
   bool _ready = false; // media tayar, progress chal sakta hai
   bool _paused = false;
+  bool _forward = true; // animation ki simt: agay ya pichay
   final Set<String> _marked = {};
   final _replyCtrl = TextEditingController();
   final _replyFocus = FocusNode();
@@ -150,8 +155,9 @@ class _StatusViewerScreenState extends State<StatusViewerScreen>
 
   // ---------------- playback ----------------
 
-  Future<void> _load(int i) async {
+  Future<void> _load(int i, {bool forward = true}) async {
     final token = ++_token;
+    _forward = forward;
     _anim.stop();
     _anim.value = 0;
 
@@ -161,7 +167,9 @@ class _StatusViewerScreenState extends State<StatusViewerScreen>
       _ready = false;
       _video = null;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
+    old?.pause();
+    // slide animation poori hone tak purani video ki frame dikhti rahe
+    Future.delayed(const Duration(milliseconds: 400), () => old?.dispose());
 
     final item = _items[i];
 
@@ -217,17 +225,17 @@ class _StatusViewerScreenState extends State<StatusViewerScreen>
 
   void _prev() {
     if (_index > 0) {
-      _load(_index - 1);
+      _load(_index - 1, forward: false);
     } else {
       _prevOwner();
     }
   }
 
-  void _switchOwner(int idx, int startIndex) {
+  void _switchOwner(int idx, int startIndex, {bool forward = true}) {
     _ownerIdx = idx;
     _ownerId = _queue[idx];
     _items = _byOwner[_ownerId]!;
-    _load(startIndex);
+    _load(startIndex, forward: forward);
   }
 
   /// Is contact ke statuses khatam: agle contact ke (na dekhe hue se) shuru
@@ -248,420 +256,462 @@ class _StatusViewerScreenState extends State<StatusViewerScreen>
     for (var i = _ownerIdx - 1; i >= 0; i--) {
       final list = _byOwner[_queue[i]];
       if (list != null && list.isNotEmpty) {
-        _switchOwner(i, list.length - 1);
+        _switchOwner(i, list.length - 1, forward: false);
         return;
       }
     }
-    _load(0);
+    _load(0, forward: false);
   }
 
   void _pause() {
     _paused = true;
-    _anim.stop();
-    _video?.pause();
-  }
+  _anim.stop();
+  _video?.pause();
+}
 
-  void _resume() {
-    _paused = false;
-    if (_ready) {
-      _anim.forward();
-      _video?.play();
-    }
+void _resume() {
+  _paused = false;
+  if (_ready) {
+    _anim.forward();
+    _video?.play();
   }
+}
 
-  Future<void> _openSheet(WidgetBuilder builder) async {
-    _pause();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
+Future<void> _openSheet(WidgetBuilder builder) async {
+  _pause();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppColors.cream,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+    ),
+    builder: builder,
+  );
+  if (mounted) _resume();
+}
+
+void _openSeenBy(StatusItem item) =>
+    _openSheet((_) => _SeenBySheet(item: item));
+
+/// Chat mein quote ke liye chhota thumbnail (Cloudinary transformation)
+String _thumbOf(StatusItem i) {
+  var url = i.mediaUrl.replaceFirst('/upload/', '/upload/w_160,h_160,c_fill/');
+  if (i.isVideo) url = url.replaceFirst(RegExp(r'\.[A-Za-z0-9]+$'), '.jpg');
+  return url;
+}
+
+/// Status ka reply status ke malik ko chat (inbox) mein jata hai
+Future<void> _sendReply(StatusItem item) async {
+  final text = _replyCtrl.text.trim();
+  if (text.isEmpty || _sendingReply) return;
+  final messenger = ScaffoldMessenger.of(context);
+  setState(() => _sendingReply = true);
+  try {
+    await chatRepo.sendMessage(
+      otherUid: _ownerId,
+      text: text,
+      replyTo: {
+        'id': item.id,
+        'text': item.caption.isNotEmpty
+            ? item.caption
+            : (item.isVideo ? '🎥 Video' : '📷 Photo'),
+        'senderId': _ownerId,
+        'isStatus': true,
+        'thumb': _thumbOf(item),
+      },
+    );
+    _replyCtrl.clear();
+    _replyFocus.unfocus();
+    messenger.showSnackBar(const SnackBar(content: Text('Reply sent')));
+  } catch (e) {
+    debugPrint('status reply error: $e');
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Could not send reply.')),
+    );
+  } finally {
+    if (mounted) setState(() => _sendingReply = false);
+  }
+}
+
+Future<void> _delete(StatusItem item) async {
+  _pause();
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
       backgroundColor: AppColors.cream,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: builder,
-    );
-    if (mounted) _resume();
-  }
-
-  void _openSeenBy(StatusItem item) =>
-      _openSheet((_) => _SeenBySheet(item: item));
-
-  /// Chat mein quote ke liye chhota thumbnail (Cloudinary transformation)
-  String _thumbOf(StatusItem i) {
-    var url = i.mediaUrl.replaceFirst('/upload/', '/upload/w_160,h_160,c_fill/');
-    if (i.isVideo) url = url.replaceFirst(RegExp(r'\.[A-Za-z0-9]+$'), '.jpg');
-    return url;
-  }
-
-  /// Status ka reply status ke malik ko chat (inbox) mein jata hai
-  Future<void> _sendReply(StatusItem item) async {
-    final text = _replyCtrl.text.trim();
-    if (text.isEmpty || _sendingReply) return;
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _sendingReply = true);
-    try {
-      await chatRepo.sendMessage(
-        otherUid: _ownerId,
-        text: text,
-        replyTo: {
-          'id': item.id,
-          'text': item.caption.isNotEmpty
-              ? item.caption
-              : (item.isVideo ? '🎥 Video' : '📷 Photo'),
-          'senderId': _ownerId,
-          'isStatus': true,
-          'thumb': _thumbOf(item),
-        },
-      );
-      _replyCtrl.clear();
-      _replyFocus.unfocus();
-      messenger.showSnackBar(const SnackBar(content: Text('Reply sent')));
-    } catch (e) {
-      debugPrint('status reply error: $e');
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Could not send reply.')),
-      );
-    } finally {
-      if (mounted) setState(() => _sendingReply = false);
-    }
-  }
-
-  Future<void> _delete(StatusItem item) async {
-    _pause();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cream,
-        title: const Text('Delete status?'),
-        content: const Text('This status will be removed for everyone.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    if (ok != true) {
-      _resume();
-      return;
-    }
-    try {
-      final last = _items.length == 1;
-      await statusRepo.delete(item.id);
-      if (!mounted) return;
-      if (last) {
-        Navigator.of(context).maybePop();
-      } else {
-        _paused = false; // stream naye status par le jayegi
-      }
-    } catch (e) {
-      debugPrint('delete status error: $e');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not delete status.')),
-      );
-      _resume();
-    }
-  }
-
-  // ---------------- UI ----------------
-
-  Widget _media(StatusItem item) {
-    if (!_ready) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppColors.gold400),
-      );
-    }
-    if (item.isVideo) {
-      final v = _video;
-      if (v == null) return const SizedBox.shrink();
-      return Center(
-        child: AspectRatio(
-          aspectRatio: v.value.aspectRatio,
-          child: VideoPlayer(v),
+      title: const Text('Delete status?'),
+      content: const Text('This status will be removed for everyone.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
         ),
-      );
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (!mounted) return;
+  if (ok != true) {
+    _resume();
+    return;
+  }
+  try {
+    final last = _items.length == 1;
+    await statusRepo.delete(item.id);
+    if (!mounted) return;
+    if (last) {
+      Navigator.of(context).maybePop();
+    } else {
+      _paused = false; // stream naye status par le jayegi
     }
-    return CachedNetworkImage(
-      imageUrl: item.mediaUrl,
-      fit: BoxFit.contain,
-      width: double.infinity,
-      height: double.infinity,
-      errorWidget: (_, __, ___) => const Center(
-        child: Icon(Icons.broken_image_outlined,
-            color: Colors.white54, size: 48),
+  } catch (e) {
+    debugPrint('delete status error: $e');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Could not delete status.')),
+    );
+    _resume();
+  }
+}
+
+// ---------------- UI ----------------
+
+/// Status badalte waqt slide + fade (agay/pichay ki simt ke mutabiq)
+Widget _mediaStage(StatusItem item) {
+  final ValueKey<String> key =
+  _ready ? ValueKey('m_${_ownerId}_${item.id}') : const ValueKey('wait');
+  final dir = _forward ? 1.0 : -1.0;
+
+  return Stack(
+    fit: StackFit.expand,
+    children: [
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 260),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        layoutBuilder: (current, previous) => Stack(
+          fit: StackFit.expand,
+          children: [...previous, if (current != null) current],
+        ),
+        transitionBuilder: (child, animation) {
+          final incoming = child.key == key;
+          final slide = Tween<Offset>(
+            begin: Offset(incoming ? dir : -dir, 0),
+            end: Offset.zero,
+          ).animate(animation);
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(position: slide, child: child),
+          );
+        },
+        child: KeyedSubtree(
+          key: key,
+          child: _ready ? _content(item) : const SizedBox.expand(),
+        ),
+      ),
+      if (!_ready)
+        const Center(
+          child: CircularProgressIndicator(color: AppColors.gold400),
+        ),
+    ],
+  );
+}
+
+Widget _content(StatusItem item) {
+  if (item.isVideo) {
+    final v = _video;
+    if (v == null) return const SizedBox.shrink();
+    return Center(
+      child: AspectRatio(
+        aspectRatio: v.value.aspectRatio,
+        child: VideoPlayer(v),
       ),
     );
   }
+  return CachedNetworkImage(
+    imageUrl: item.mediaUrl,
+    fit: BoxFit.contain,
+    width: double.infinity,
+    height: double.infinity,
+    errorWidget: (_, __, ___) => const Center(
+      child: Icon(Icons.broken_image_outlined,
+          color: Colors.white54, size: 48),
+    ),
+  );
+}
 
-  Widget _progress() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-      child: AnimatedBuilder(
-        animation: _anim,
-        builder: (context, _) {
-          return Row(
-            children: [
-              for (var i = 0; i < _items.length; i++)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(2),
-                      child: LinearProgressIndicator(
-                        minHeight: 3,
-                        value: i < _index
-                            ? 1
-                            : i == _index
-                            ? _anim.value
-                            : 0,
-                        backgroundColor: Colors.white24,
-                        valueColor:
-                        const AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
+Widget _progress() {
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+    child: AnimatedBuilder(
+      animation: _anim,
+      builder: (context, _) {
+        return Row(
+          children: [
+            for (var i = 0; i < _items.length; i++)
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      value: i < _index
+                          ? 1
+                          : i == _index
+                          ? _anim.value
+                          : 0,
+                      backgroundColor: Colors.white24,
+                      valueColor:
+                      const AlwaysStoppedAnimation<Color>(Colors.white),
                     ),
                   ),
                 ),
-            ],
-          );
-        },
-      ),
-    );
-  }
+              ),
+          ],
+        );
+      },
+    ),
+  );
+}
 
-  Widget _header(StatusItem item) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 4, 12, 0),
+Widget _header(StatusItem item) {
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(4, 4, 12, 0),
+    child: Row(
+      children: [
+        IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new,
+              size: 18, color: Colors.white),
+          onPressed: () => Navigator.of(context).maybePop(),
+        ),
+        _UserBuilder(
+          uid: _ownerId,
+          builder: (context, username, photo) {
+            return Row(
+              children: [
+                UserAvatar(username: username, photoUrl: photo, size: 36),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.isMine ? 'My status' : username,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                    Text(
+                      _ago(_timeOf(item)),
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    ),
+  );
+}
+
+Widget _pill(IconData icon, String text, VoidCallback onTap,
+    {Color color = Colors.white}) {
+  return InkWell(
+    borderRadius: BorderRadius.circular(22),
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.black38,
+        borderRadius: BorderRadius.circular(22),
+      ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new,
-                size: 18, color: Colors.white),
-            onPressed: () => Navigator.of(context).maybePop(),
-          ),
-          _UserBuilder(
-            uid: _ownerId,
-            builder: (context, username, photo) {
-              return Row(
-                children: [
-                  UserAvatar(username: username, photoUrl: photo, size: 36),
-                  const SizedBox(width: 10),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.isMine ? 'My status' : username,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
-                        ),
-                      ),
-                      Text(
-                        _ago(_timeOf(item)),
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            },
-          ),
+          Icon(icon, size: 20, color: color),
+          if (text.isNotEmpty) ...[
+            const SizedBox(width: 6),
+            Text(
+              text,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
-  Widget _pill(IconData icon, String text, VoidCallback onTap,
-      {Color color = Colors.white}) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(22),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-        decoration: BoxDecoration(
-          color: Colors.black38,
-          borderRadius: BorderRadius.circular(22),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 20, color: color),
-            if (text.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Text(
-                text,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _bottomBar(StatusItem item) {
-    if (widget.isMine) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        child: Row(
-          children: [
-            _pill(Icons.visibility_outlined, '${item.viewedBy.length}',
-                    () => _openSeenBy(item)),
-            const Spacer(),
-            _pill(Icons.delete_outline, '', () => _delete(item)),
-          ],
-        ),
-      );
-    }
-
-    final liked = item.likedBy(_me);
-    OutlineInputBorder border(Color c) => OutlineInputBorder(
-      borderRadius: BorderRadius.circular(24),
-      borderSide: BorderSide(color: c),
-    );
-
+Widget _bottomBar(StatusItem item) {
+  if (widget.isMine) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _replyCtrl,
-              focusNode: _replyFocus,
-              minLines: 1,
-              maxLines: 3,
-              textCapitalization: TextCapitalization.sentences,
-              style: const TextStyle(color: Colors.white),
-              cursorColor: Colors.white,
-              decoration: InputDecoration(
-                hintText: 'Reply...',
-                hintStyle: const TextStyle(color: Colors.white70),
-                filled: true,
-                fillColor: Colors.black38,
-                isDense: true,
-                contentPadding:
-                const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                border: border(Colors.white38),
-                enabledBorder: border(Colors.white38),
-                focusedBorder: border(Colors.white70),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _replyCtrl,
-            builder: (context, v, _) {
-              final hasText = v.text.trim().isNotEmpty;
-              return hasText
-                  ? _pill(Icons.send_rounded, '', () => _sendReply(item),
-                  color: AppColors.gold400)
-                  : _pill(
-                liked ? Icons.favorite : Icons.favorite_border,
-                '',
-                    () => statusRepo.setLike(item.id, !liked),
-                color: liked ? Colors.redAccent : Colors.white,
-              );
-            },
-          ),
+          _pill(Icons.visibility_outlined, '${item.viewedBy.length}',
+                  () => _openSeenBy(item)),
+          const Spacer(),
+          _pill(Icons.delete_outline, '', () => _delete(item)),
         ],
       ),
     );
   }
 
-  Widget _scrim({required bool top}) {
-    return Positioned(
-      top: top ? 0 : null,
-      bottom: top ? null : 0,
-      left: 0,
-      right: 0,
-      child: IgnorePointer(
-        child: Container(
-          height: top ? 140 : 200,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: top ? Alignment.topCenter : Alignment.bottomCenter,
-              end: top ? Alignment.bottomCenter : Alignment.topCenter,
-              colors: const [Colors.black54, Colors.transparent],
+  final liked = item.likedBy(_me);
+  OutlineInputBorder border(Color c) => OutlineInputBorder(
+    borderRadius: BorderRadius.circular(24),
+    borderSide: BorderSide(color: c),
+  );
+
+  return Padding(
+    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _replyCtrl,
+            focusNode: _replyFocus,
+            minLines: 1,
+            maxLines: 3,
+            textCapitalization: TextCapitalization.sentences,
+            style: const TextStyle(color: Colors.white),
+            cursorColor: Colors.white,
+            decoration: InputDecoration(
+              hintText: 'Reply...',
+              hintStyle: const TextStyle(color: Colors.white70),
+              filled: true,
+              fillColor: Colors.black38,
+              isDense: true,
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              border: border(Colors.white38),
+              enabledBorder: border(Colors.white38),
+              focusedBorder: border(Colors.white70),
             ),
           ),
         ),
-      ),
-    );
-  }
+        const SizedBox(width: 8),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _replyCtrl,
+          builder: (context, v, _) {
+            final hasText = v.text.trim().isNotEmpty;
+            return hasText
+                ? _pill(Icons.send_rounded, '', () => _sendReply(item),
+                color: AppColors.gold400)
+                : _pill(
+              liked ? Icons.favorite : Icons.favorite_border,
+              '',
+                  () => statusRepo.setLike(item.id, !liked),
+              color: liked ? Colors.redAccent : Colors.white,
+            );
+          },
+        ),
+      ],
+    ),
+  );
+}
 
-  @override
-  Widget build(BuildContext context) {
-    final item = _items[_index];
-
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
-      child: Scaffold(
-        resizeToAvoidBottomInset: false,
-        backgroundColor: Colors.black,
-        body: Stack(
-          fit: StackFit.expand,
-          children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapUp: (d) {
-                if (_replyFocus.hasFocus) {
-                  _replyFocus.unfocus();
-                  return;
-                }
-                final w = MediaQuery.of(context).size.width;
-                d.localPosition.dx < w / 3 ? _prev() : _next();
-              },
-              onLongPressStart: (_) => _pause(),
-              onLongPressEnd: (_) => _resume(),
-              child: _media(item),
-            ),
-            _scrim(top: true),
-            _scrim(top: false),
-            SafeArea(
-              child: Column(
-                children: [
-                  _progress(),
-                  _header(item),
-                  const Spacer(),
-                  if (item.caption.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Text(
-                        item.caption,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                  Padding(
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.of(context).viewInsets.bottom,
-                    ),
-                    child: _bottomBar(item),
-                  ),
-                ],
-              ),
-            ),
-          ],
+Widget _scrim({required bool top}) {
+  return Positioned(
+    top: top ? 0 : null,
+    bottom: top ? null : 0,
+    left: 0,
+    right: 0,
+    child: IgnorePointer(
+      child: Container(
+        height: top ? 140 : 200,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: top ? Alignment.topCenter : Alignment.bottomCenter,
+            end: top ? Alignment.bottomCenter : Alignment.topCenter,
+            colors: const [Colors.black54, Colors.transparent],
+          ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
+
+@override
+Widget build(BuildContext context) {
+  final item = _items[_index];
+
+  return AnnotatedRegion<SystemUiOverlayStyle>(
+    value: SystemUiOverlayStyle.light,
+    child: Scaffold(
+      resizeToAvoidBottomInset: false,
+      backgroundColor: Colors.black,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (d) {
+              if (_replyFocus.hasFocus) {
+                _replyFocus.unfocus();
+                return;
+              }
+              final w = MediaQuery.of(context).size.width;
+              d.localPosition.dx < w / 3 ? _prev() : _next();
+            },
+            onHorizontalDragEnd: (d) {
+              final v = d.primaryVelocity ?? 0;
+              if (v.abs() < 300) return;
+              final right = v > 0;
+              right == _swipeRightGoesNext ? _next() : _prev();
+            },
+            onLongPressStart: (_) => _pause(),
+            onLongPressEnd: (_) => _resume(),
+            child: _mediaStage(item),
+          ),
+          _scrim(top: true),
+          _scrim(top: false),
+          SafeArea(
+            child: Column(
+              children: [
+                _progress(),
+                _header(item),
+                const Spacer(),
+                if (item.caption.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Text(
+                      item.caption,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom,
+                  ),
+                  child: _bottomBar(item),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
 }
 
 // ---------------------------------------------------------------------------

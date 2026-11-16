@@ -12,6 +12,9 @@ import '../widgets.dart';
 import 'create_group_screen.dart';
 import 'group_chat_screen.dart';
 
+/// MainShell ko batata hai ke Groups mein selection chal rahi hai (back dabane par Home par na jaye)
+final ValueNotifier<bool> groupsSelecting = ValueNotifier<bool>(false);
+
 class GroupsScreen extends StatefulWidget {
   const GroupsScreen({super.key});
 
@@ -27,6 +30,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _failed = false;
   final _searchCtrl = TextEditingController();
   String _query = '';
+  final Set<String> _selected = {};
+  bool get _selecting => _selected.isNotEmpty;
 
   @override
   void initState() {
@@ -56,12 +61,168 @@ class _GroupsScreenState extends State<GroupsScreen> {
     _sub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
+    groupsSelecting.value = false;
   }
 
   void _create() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
     );
+  }
+
+  bool _isMember(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
+      List<String>.from(d.data()['members'] ?? const []).contains(_myUid);
+
+  bool _isPinned(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final p = d.data()['pinnedBy'];
+    return p is List && p.contains(_myUid);
+  }
+
+  bool _isMarkedUnread(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final m = d.data()['markedUnread'];
+    return m is List && m.contains(_myUid);
+  }
+
+  /// Maine ye group delete kiya ho (member hoon to naya message aane par wapis aa jata hai,
+  /// chhodne wale ke liye wapis nahi aata)
+  bool _isDeletedForMe(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+    final data = d.data();
+    final del = data['deletedAt'];
+    if (del is! Map || !del.containsKey(_myUid)) return false;
+    if (!_isMember(d)) return true;
+    final cut = del[_myUid] as Timestamp?;
+    if (cut == null) return true;
+    final last = data['lastMessageAt'] as Timestamp?;
+    if (last == null) return false;
+    return last.compareTo(cut) <= 0;
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> get _chosen =>
+      _docs.where((d) => _selected.contains(d.id)).toList();
+
+  void _toggleSelect(String id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+    groupsSelecting.value = _selected.isNotEmpty;
+  }
+
+  void _clearSelection() {
+    setState(_selected.clear);
+    // MainShell ka back-handler isi frame mein chalta hai, isliye flag baad mein girao
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => groupsSelecting.value = false);
+  }
+
+  void _snack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<bool> _confirm({
+    required String title,
+    required String body,
+    required String action,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: softCardColor,
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: Text(body, style: const TextStyle(color: AppColors.brown700)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
+
+  Future<void> _togglePin() async {
+    final chosen = _chosen;
+    final unpin = chosen.every(_isPinned);
+    if (!unpin) {
+      final already =
+          _docs.where((d) => !_isDeletedForMe(d) && _isPinned(d)).length;
+      final fresh = chosen.where((d) => !_isPinned(d)).length;
+      if (already + fresh > 3) {
+        _snack('You can pin up to 3 groups');
+        return;
+      }
+    }
+    _clearSelection();
+    try {
+      await Future.wait(chosen.map((d) => groupRepo.setPinned(d.id, !unpin)));
+    } catch (_) {
+      _snack('Could not update pin. Try again.');
+    }
+  }
+
+  Future<void> _toggleMarkUnread() async {
+    final chosen = _chosen;
+    final mark = !chosen.every(_isMarkedUnread);
+    _clearSelection();
+    try {
+      await Future.wait(
+        chosen.map((d) => groupRepo.setMarkedUnread(d.id, mark)),
+      );
+    } catch (_) {
+      _snack('Could not update group. Try again.');
+    }
+  }
+
+  Future<void> _deleteSelected() async {
+    final chosen = _chosen;
+    if (chosen.any(_isMember)) {
+      _snack('Leave the group first, then you can delete it');
+      return;
+    }
+    final ok = await _confirm(
+      title: chosen.length == 1 ? 'Delete group?' : 'Delete ${chosen.length} groups?',
+      body: 'The group will be removed from your list and its messages deleted for you.',
+      action: 'Delete',
+    );
+    if (!ok || !mounted) return;
+    _clearSelection();
+    try {
+      await Future.wait(chosen.map((d) => groupRepo.deleteGroupForMe(d.id)));
+    } catch (_) {
+      _snack('Could not delete group. Try again.');
+    }
+  }
+
+  Future<void> _leaveSelected() async {
+    final groups = _chosen.where(_isMember).toList();
+    if (groups.isEmpty) {
+      _snack('You have already left');
+      return;
+    }
+    final ok = await _confirm(
+      title: groups.length == 1 ? 'Leave group?' : 'Leave ${groups.length} groups?',
+      body: "You won't receive new messages. The old chat stays in your list until you delete it.",
+      action: 'Leave',
+    );
+    if (!ok || !mounted) return;
+    _clearSelection();
+    try {
+      await Future.wait(groups.map((d) => groupRepo.leaveGroup(d.id)));
+    } catch (_) {
+      _snack('Could not leave the group. Try again.');
+    }
   }
 
   Timestamp? _leftTime(Map<String, dynamic> g) {
@@ -321,27 +482,33 @@ class _GroupsScreenState extends State<GroupsScreen> {
         subtitle: 'Check your internet and try again.',
       );
     }
-    if (_docs.isEmpty) {
+    final visible = _docs.where((d) => !_isDeletedForMe(d)).toList();
+    if (visible.isEmpty) {
       return const EmptyState(
         icon: Icons.groups_outlined,
         title: 'No groups yet',
         subtitle: 'Tap + to create a group with your contacts.',
       );
     }
-    final list = _query.isEmpty
-        ? _docs
-        : _docs
+    final filtered = _query.isEmpty
+        ? visible
+        : visible
         .where((d) => ((d.data()['name'] as String?) ?? '')
         .toLowerCase()
         .contains(_query))
         .toList();
-    if (list.isEmpty) {
+    if (filtered.isEmpty) {
       return EmptyState(
         icon: Icons.search_off,
         title: 'No groups found',
         subtitle: 'No group matches "$_query".',
       );
     }
+    // pin kiye hue upar
+    final list = [
+      ...filtered.where(_isPinned),
+      ...filtered.where((d) => !_isPinned(d)),
+    ];
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       itemCount: list.length,
@@ -359,10 +526,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
             : (unreadMap is Map
             ? ((unreadMap[_myUid] as num?)?.toInt() ?? 0)
             : 0);
+        final pinned = _isPinned(d);
+        final marked = _isMarkedUnread(d);
+        final selected = _selected.contains(d.id);
 
         return Container(
           decoration: BoxDecoration(
-            color: softCardColor,
+            color: selected ? AppColors.gold200 : softCardColor,
             borderRadius: BorderRadius.circular(18),
             boxShadow: [
               BoxShadow(
@@ -376,7 +546,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
             color: Colors.transparent,
             child: InkWell(
               borderRadius: BorderRadius.circular(18),
-              onTap: () => Navigator.of(context).push(
+              onLongPress: () => _toggleSelect(d.id),
+              onTap: _selecting
+                  ? () => _toggleSelect(d.id)
+                  : () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => GroupChatScreen(
                     groupId: d.id,
@@ -390,7 +563,9 @@ class _GroupsScreenState extends State<GroupsScreen> {
                 child: Row(
                   children: [
                     GestureDetector(
-                      onTap: () => _showPhoto(d.id, name, photo, isMember),
+                      onTap: _selecting
+                          ? () => _toggleSelect(d.id)
+                          : () => _showPhoto(d.id, name, photo, isMember),
                       child:
                       UserAvatar(username: name, photoUrl: photo, size: 52),
                     ),
@@ -440,27 +615,51 @@ class _GroupsScreenState extends State<GroupsScreen> {
                           ),
                         ),
                         const SizedBox(height: 6),
-                        if (unread > 0)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 7, vertical: 2),
-                            constraints: const BoxConstraints(minWidth: 22),
-                            decoration: BoxDecoration(
-                              color: AppColors.gold700,
-                              borderRadius: BorderRadius.circular(11),
-                            ),
-                            child: Text(
-                              unread > 99 ? '99+' : '$unread',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                color: AppColors.cream,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (pinned)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 6),
+                                child: Icon(
+                                  Icons.push_pin,
+                                  size: 16,
+                                  color: AppColors.brown700,
+                                ),
                               ),
-                            ),
-                          )
-                        else
-                          const SizedBox(height: 22),
+                            if (unread > 0)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 2),
+                                constraints:
+                                const BoxConstraints(minWidth: 22),
+                                decoration: BoxDecoration(
+                                  color: AppColors.gold700,
+                                  borderRadius: BorderRadius.circular(11),
+                                ),
+                                child: Text(
+                                  unread > 99 ? '99+' : '$unread',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: AppColors.cream,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              )
+                            else if (marked)
+                              Container(
+                                width: 12,
+                                height: 12,
+                                decoration: const BoxDecoration(
+                                  color: AppColors.gold700,
+                                  shape: BoxShape.circle,
+                                ),
+                              )
+                            else if (!pinned)
+                                const SizedBox(height: 22),
+                          ],
+                        ),
                       ],
                     ),
                   ],
@@ -475,45 +674,129 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.cream,
-      floatingActionButton: Container(
-        width: 58,
-        height: 58,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: const LinearGradient(
-            colors: [AppColors.gold500, AppColors.gold700],
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.gold700.withValues(alpha: 0.4),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _clearSelection();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.cream,
+        floatingActionButton: Container(
+          width: 58,
+          height: 58,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [AppColors.gold500, AppColors.gold700],
             ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.gold700.withValues(alpha: 0.4),
+                blurRadius: 16,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _create,
+              child: const Icon(
+                Icons.group_add_outlined,
+                color: AppColors.cream,
+              ),
+            ),
+          ),
+        ),
+        body: Column(
+          children: [
+            GradientHeader(
+              title: _selecting ? '${_selected.length} selected' : 'Groups',
+              titleStyle: _selecting
+                  ? const TextStyle(
+                color: Colors.black,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+              )
+                  : null,
+              actions: _selecting
+                  ? [
+                IconButton(
+                  tooltip: 'Pin',
+                  icon: Icon(
+                    _chosen.every(_isPinned)
+                        ? Icons.push_pin_outlined
+                        : Icons.push_pin,
+                    color: Colors.black,
+                  ),
+                  onPressed: _togglePin,
+                ),
+                IconButton(
+                  tooltip: 'Delete',
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.black),
+                  onPressed: _deleteSelected,
+                ),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, color: Colors.black),
+                  color: softCardColor,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  onSelected: (v) {
+                    if (v == 'unread') {
+                      _toggleMarkUnread();
+                    } else if (v == 'leave') {
+                      _leaveSelected();
+                    }
+                  },
+                  itemBuilder: (_) {
+                    final allMarked = _chosen.every(_isMarkedUnread);
+                    final anyMember = _chosen.any(_isMember);
+                    PopupMenuItem<String> item(
+                        String v, IconData icon, String label) {
+                      return PopupMenuItem(
+                        value: v,
+                        child: Row(
+                          children: [
+                            Icon(icon, color: AppColors.gold700),
+                            const SizedBox(width: 12),
+                            Text(
+                              label,
+                              style: const TextStyle(
+                                color: AppColors.brown900,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }
+
+                    return [
+                      item(
+                        'unread',
+                        allMarked
+                            ? Icons.mark_chat_read_outlined
+                            : Icons.mark_chat_unread_outlined,
+                        allMarked ? 'Mark as read' : 'Mark as unread',
+                      ),
+                      if (anyMember)
+                        item('leave', Icons.logout, 'Leave group'),
+                    ];
+                  },
+                ),
+              ]
+                  : const [],
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: _searchBar(),
+            ),
+            Expanded(child: _body()),
           ],
         ),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: _create,
-            child: const Icon(
-              Icons.group_add_outlined,
-              color: AppColors.cream,
-            ),
-          ),
-        ),
-      ),
-      body: Column(
-        children: [
-          const GradientHeader(title: 'Groups'),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-            child: _searchBar(),
-          ),
-          Expanded(child: _body()),
-        ],
       ),
     );
   }

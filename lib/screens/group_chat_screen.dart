@@ -18,6 +18,25 @@ import 'group_info_screen.dart';
 import 'group_message_info_screen.dart';
 import 'forward_to_screen.dart';
 
+class _ChatBg {
+  final String key;
+  final String name;
+  final Color color;
+  const _ChatBg(this.key, this.name, this.color);
+}
+
+// chat_screen.dart wali hi list (keys same rakhna)
+const _chatBgs = [
+  _ChatBg('default', 'Default', AppColors.cream),
+  _ChatBg('sand', 'Sand', Color(0xFFF1E4C3)),
+  _ChatBg('peach', 'Peach', Color(0xFFFBE0D2)),
+  _ChatBg('blush', 'Blush', Color(0xFFF8DCE4)),
+  _ChatBg('mint', 'Mint', Color(0xFFDDEFDF)),
+  _ChatBg('sky', 'Sky', Color(0xFFDCEAF7)),
+  _ChatBg('lavender', 'Lavender', Color(0xFFE6DFF3)),
+  _ChatBg('grey', 'Grey', Color(0xFFEDEDED)),
+];
+
 class GroupChatScreen extends StatefulWidget {
   final String groupId;
   final String name;
@@ -78,6 +97,25 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   String? _flashId;
   Timer? _flashTimer;
 
+  // ---- search ----
+  bool _searching = false;
+  String _searchQuery = '';
+  final _searchCtrl = TextEditingController();
+  int _matchIndex = 0;
+
+  // ---- chat theme (group doc mein: chatTheme.<uid>) ----
+  String? get _themeKey {
+    final t = _group['chatTheme'];
+    return t is Map ? t[_myUid] as String? : null;
+  }
+
+  Color get _chatBg {
+    for (final b in _chatBgs) {
+      if (b.key == _themeKey) return b.color;
+    }
+    return AppColors.cream;
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
@@ -125,6 +163,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _controller.dispose();
     _inputFocus.dispose();
     _scroll.dispose();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
@@ -173,7 +212,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     // naya message aaya aur screen khuli hai: padha hua mark karo
     final unread = data['unread'];
     final mine = unread is Map ? ((unread[_myUid] as num?)?.toInt() ?? 0) : 0;
-    if (mine > 0 && !_marking) {
+    final mk = data['markedUnread'];
+    final marked = mk is List && mk.contains(_myUid);
+    if ((mine > 0 || marked) && !_marking) {
       _marking = true;
       groupRepo
           .markRead(widget.groupId)
@@ -266,12 +307,25 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final del = m['deletedFor'];
     if (del is List && del.contains(_myUid)) return false;
 
-    final j = _group['joinedAt'];
-    final joined = j is Map ? j[_myUid] : null;
     final c = m['createdAt'];
     if (c is! Timestamp) return true;
+
+    // join hone se pehle ke messages nahi
+    final j = _group['joinedAt'];
+    final joined = j is Map ? j[_myUid] : null;
     if (joined is Timestamp && c.compareTo(joined) < 0) return false;
 
+    // maine group delete kiya ho to uske baad ke messages hi dikhao
+    final dl = _group['deletedAt'];
+    final deletedAt = dl is Map ? dl[_myUid] : null;
+    if (deletedAt is Timestamp && c.compareTo(deletedAt) <= 0) return false;
+
+    // maine chat clear ki ho to uske baad ke messages hi dikhao
+    final cl = _group['clearedAt'];
+    final clearedAt = cl is Map ? cl[_myUid] : null;
+    if (clearedAt is Timestamp && c.compareTo(clearedAt) <= 0) return false;
+
+    // chhodne se dobara add hone ke beech ka gap
     final g = _group['gaps'];
     if (g is Map && g[_myUid] is Map) {
       for (final e in (g[_myUid] as Map).entries) {
@@ -740,6 +794,356 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   // UI
   // -------------------------------------------------------------------------
 
+  Widget _groupMenu() {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert, color: Colors.black),
+      color: softCardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      onSelected: _onMenuSelected,
+      itemBuilder: (_) => [
+        _menuItem('info', Icons.info_outline, 'Group info'),
+        _menuItem('theme', Icons.palette_outlined, 'Chat theme'),
+        _menuItem('search', Icons.search, 'Search'),
+        _menuItem('clear', Icons.delete_sweep_outlined, 'Clear chat'),
+        // chhodne ke baad "Exit group" nahi dikhega
+        if (_isMember)
+          _menuItem('exit', Icons.exit_to_app, 'Exit group'),
+      ],
+    );
+  }
+
+  void _onMenuSelected(String v) {
+    switch (v) {
+      case 'info':
+        _openInfo();
+        break;
+      case 'theme':
+        _openThemePicker();
+        break;
+      case 'search':
+        setState(() => _searching = true);
+        break;
+      case 'clear':
+        _clearChat();
+        break;
+      case 'exit':
+        _exitGroup();
+        break;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Search
+  // -------------------------------------------------------------------------
+
+  /// Jin messages mein search wala lafz hai un ki ids (naya pehle)
+  List<String> _matchIds() {
+    if (_searchQuery.isEmpty) return const [];
+    return _visible.where((d) {
+      final m = d.data();
+      if (m['type'] == 'system' || m['deletedForAll'] == true) return false;
+      return ((m['text'] as String?) ?? '')
+          .toLowerCase()
+          .contains(_searchQuery);
+    }).map((d) => d.id).toList();
+  }
+
+  /// Maujooda match tak scroll karo (1 second flash bhi hoga)
+  void _jumpToMatch() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ids = _matchIds();
+      if (ids.isEmpty) return;
+      _jumpTo(ids[_matchIndex.clamp(0, ids.length - 1)]);
+    });
+  }
+
+  /// delta +1 = purana match, -1 = naya match
+  void _stepMatch(int delta) {
+    final n = _matchIds().length;
+    if (n == 0) return;
+    setState(() => _matchIndex = (_matchIndex + delta + n) % n);
+    _jumpToMatch();
+  }
+
+  void _closeSearch() {
+    _searchCtrl.clear();
+    setState(() {
+      _searching = false;
+      _searchQuery = '';
+      _matchIndex = 0;
+    });
+  }
+
+  Widget _searchField() {
+    final n = _matchIds().length;
+    final pos = n == 0 ? 0 : _matchIndex.clamp(0, n - 1) + 1;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: softCardColor,
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.brown900.withValues(alpha: 0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: TextField(
+          controller: _searchCtrl,
+          autofocus: true,
+          onChanged: (v) {
+            setState(() {
+              _searchQuery = v.trim().toLowerCase();
+              _matchIndex = 0;
+            });
+            _jumpToMatch();
+          },
+          cursorColor: AppColors.gold700,
+          style: const TextStyle(
+            color: AppColors.brown900,
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+          ),
+          decoration: InputDecoration(
+            hintText: 'Search messages',
+            hintStyle: TextStyle(
+              color: AppColors.brown700.withValues(alpha: 0.7),
+            ),
+            prefixIcon: const Icon(Icons.search, color: AppColors.gold700),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_searchQuery.isNotEmpty)
+                  Text(
+                    '$pos/$n',
+                    style: const TextStyle(
+                      color: AppColors.brown700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                  const BoxConstraints(minWidth: 34, minHeight: 40),
+                  icon: const Icon(Icons.keyboard_arrow_up,
+                      color: AppColors.brown700),
+                  onPressed: n == 0 ? null : () => _stepMatch(1),
+                ),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                  const BoxConstraints(minWidth: 34, minHeight: 40),
+                  icon: const Icon(Icons.keyboard_arrow_down,
+                      color: AppColors.brown700),
+                  onPressed: n == 0 ? null : () => _stepMatch(-1),
+                ),
+                IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints:
+                  const BoxConstraints(minWidth: 34, minHeight: 40),
+                  icon: const Icon(Icons.close, color: AppColors.brown700),
+                  onPressed: _closeSearch,
+                ),
+              ],
+            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Theme
+  // -------------------------------------------------------------------------
+
+  void _openThemePicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: softCardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Chat theme',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.brown900,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 16,
+                runSpacing: 16,
+                children: [for (final b in _chatBgs) _themeDot(ctx, b)],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _themeDot(BuildContext ctx, _ChatBg b) {
+    final selected = (_themeKey ?? 'default') == b.key;
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(ctx);
+        _setTheme(b.key);
+      },
+      child: Column(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: b.color,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected
+                    ? AppColors.gold700
+                    : AppColors.brown700.withValues(alpha: 0.25),
+                width: selected ? 3 : 1,
+              ),
+            ),
+            child: selected
+                ? const Icon(Icons.check, color: AppColors.gold700)
+                : null,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            b.name,
+            style: const TextStyle(fontSize: 12, color: AppColors.brown900),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _setTheme(String key) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await groupRepo.setChatTheme(
+        widget.groupId,
+        key == 'default' ? null : key,
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not change theme. Try again.')),
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Exit group
+  // -------------------------------------------------------------------------
+
+  Future<void> _exitGroup() async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: softCardColor,
+        title: const Text(
+          'Exit group?',
+          style: TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: Text(
+          "You won't be able to send or receive new messages in $_name.",
+          style: const TextStyle(color: AppColors.brown700),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Exit'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      await groupRepo.leaveGroup(widget.groupId);
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not exit group. Try again.')),
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Clear chat
+  // -------------------------------------------------------------------------
+
+  Future<void> _clearChat() async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: softCardColor,
+        title: const Text(
+          'Clear chat?',
+          style: TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: const Text(
+          'All messages will be cleared for you only. Other members will still keep their copy.',
+          style: TextStyle(color: AppColors.brown700),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    try {
+      await groupRepo.clearChatForMe(widget.groupId);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Chat cleared')),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not clear chat. Try again.')),
+      );
+    }
+  }
+
   PopupMenuItem<String> _menuItem(String v, IconData icon, String label) {
     return PopupMenuItem(
       value: v,
@@ -1024,13 +1428,15 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   Widget build(BuildContext context) {
     return PopScope(
-      canPop: !_selecting && _editingId == null,
+      canPop: !_searching && !_selecting && _editingId == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_selecting) {
           _clearSelection();
         } else if (_editingId != null) {
           _cancelEdit();
+        } else {
+          _closeSearch();
         }
       },
       child: Scaffold(
@@ -1038,7 +1444,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
         body: Column(
           children: [
             GestureDetector(
-              onTap: (_selecting || !_isMember) ? null : _openInfo,
+              onTap: _selecting ? null : _openInfo,
               child: GradientHeader(
                 title: _selecting ? '${_selected.length} selected' : _name,
                 subtitle: _selecting || !_isMember ? null : _headerStatus,
@@ -1055,12 +1461,18 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   photoUrl: _photoUrl,
                   size: 40,
                 ),
-                actions: _selecting ? _msgActions() : const [],
+                actions: _selecting ? _msgActions() : [_groupMenu()],
               ),
             ),
+            if (_searching) _searchField(),
             if (_isMember && _pinned.isNotEmpty) _pinBar(),
-            Expanded(child: _messages()),
-            _isMember ? _inputBar() : _cantSendBar(),
+            Expanded(
+              child: Container(
+                color: _chatBg,
+                child: _messages(),
+              ),
+            ),
+            if (!_searching) _isMember ? _inputBar() : _cantSendBar(),
           ],
         ),
       ),
@@ -1094,6 +1506,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     return ListView.builder(
       controller: _scroll,
       reverse: true,
+      cacheExtent: _searching ? 100000 : null,
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       itemCount: msgs.length,
       itemBuilder: (_, i) {

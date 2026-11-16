@@ -30,6 +30,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   Map<String, dynamic> _group = {};
   bool _loaded = false;
   bool _busy = false;
+  bool _isMember = true;
 
   @override
   void initState() {
@@ -38,14 +39,25 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
           (snap) {
         if (!mounted) return;
         final data = snap.data();
-        if (data == null ||
-            !List<String>.from(data['members'] ?? const [])
-                .contains(_myUid)) {
+        if (data == null) {
           if (!_busy) Navigator.of(context).pop(true);
           return;
         }
+        final member =
+        List<String>.from(data['members'] ?? const []).contains(_myUid);
+
+        // chhodne / remove hone ke baad: us waqt ki saved copy dikhao
+        var shown = data;
+        if (!member) {
+          final snaps = data['leftSnapshot'];
+          final mine = snaps is Map ? snaps[_myUid] : null;
+          if (mine is Map) {
+            shown = {...data, ...Map<String, dynamic>.from(mine)};
+          }
+        }
         setState(() {
-          _group = data;
+          _group = shown;
+          _isMember = member;
           _loaded = true;
         });
         _ensureUsers();
@@ -65,7 +77,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   List<String> get _members =>
       List<String>.from(_group['members'] ?? const []);
   List<String> get _admins => List<String>.from(_group['admins'] ?? const []);
-  bool get _amAdmin => _admins.contains(_myUid);
+  bool get _amAdmin => _isMember && _admins.contains(_myUid);
 
   void _ensureUsers() {
     final missing = _members.where((u) => chatRepo.cachedUser(u) == null);
@@ -96,6 +108,33 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Widget _leftNote() {
+    final lb = _group['leftBy'];
+    final by = lb is Map ? ((lb[_myUid] as String?) ?? '') : '';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.gold500.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 18, color: AppColors.gold700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              by.isEmpty
+                  ? 'You left this group. This is how it looked when you left.'
+                  : 'You were removed by $by. This is how it looked when you were removed.',
+              style: const TextStyle(color: AppColors.brown900),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // ------------------------------------------------------------------ edit
@@ -432,9 +471,11 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                       ),
                     ),
                   ),
+                if (!_isMember) _leftNote(),
                 for (final uid in sorted) _memberTile(uid),
                 const SizedBox(height: 14),
-                TextButton.icon(
+                if (_isMember)
+                  TextButton.icon(
                   onPressed: _busy ? null : _leave,
                   icon: const Icon(Icons.logout, color: Colors.red),
                   label: const Text(
