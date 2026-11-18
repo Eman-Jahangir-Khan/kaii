@@ -37,7 +37,7 @@ class NotificationService {
 
       await _local.initialize(
         settings: const InitializationSettings(
-          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          android: AndroidInitializationSettings('ic_notification'),
           iOS: DarwinInitializationSettings(),
         ),
         onDidReceiveNotificationResponse: (resp) {
@@ -77,7 +77,7 @@ class NotificationService {
           channelDescription: _channel.description,
           importance: Importance.high,
           priority: Priority.high,
-          icon: '@mipmap/ic_launcher',
+          icon: 'ic_notification',
         ),
       ),
       payload: jsonEncode(m.data),

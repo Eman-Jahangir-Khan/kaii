@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets.dart';
 import 'status_create_screen.dart';
 import 'status_viewer_screen.dart';
+import 'status_privacy_screen.dart';
 
 DateTime _timeOf(StatusItem i) =>
     i.createdAt ?? i.expiresAt.subtract(statusLifetime);
@@ -63,10 +64,7 @@ class _StatusScreenState extends State<StatusScreen> {
     _tick?.cancel();
     super.dispose();
   }
-
-  void _soon([String what = 'Coming soon']) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(what)));
-  }
+  
 
   void _openMine(List<StatusItem> items) {
     Navigator.of(context).push(
@@ -294,10 +292,11 @@ class _StatusScreenState extends State<StatusScreen> {
       icon: const Icon(Icons.more_vert, color: Colors.black),
       color: softCardColor,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      onSelected: (_) => _soon(),
+      onSelected: (_) => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const StatusPrivacyScreen()),
+      ),
       itemBuilder: (_) => [
         _menuItem('privacy', Icons.lock_outline, 'Status privacy'),
-        _menuItem('settings', Icons.settings_outlined, 'Settings'),
       ],
     );
   }

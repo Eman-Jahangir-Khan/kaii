@@ -7,6 +7,14 @@ final statusRepo = StatusRepository();
 /// Status kitni der rehta hai
 const statusLifetime = Duration(hours: 24);
 
+
+/// Status ki default visibility
+class StatusPrivacy {
+  final String mode; // 'contacts' | 'only' | 'except'
+  final List<String> uids;
+  const StatusPrivacy(this.mode, this.uids);
+}
+
 /// Ek status (image ya video)
 class StatusItem {
   final String id;
@@ -93,6 +101,23 @@ class StatusRepository {
       if (other.isNotEmpty) out.add(other);
     }
     return out;
+  }
+
+  Future<StatusPrivacy> getPrivacy() async {
+    final d = await _db.collection('statusSettings').doc(_uid).get();
+    final m = d.data();
+    if (m == null) return const StatusPrivacy('contacts', []);
+    return StatusPrivacy(
+      (m['mode'] as String?) ?? 'contacts',
+      List<String>.from(m['uids'] as List? ?? const []),
+    );
+  }
+
+  Future<void> savePrivacy(String mode, List<String> uids) {
+    return _db.collection('statusSettings').doc(_uid).set({
+      'mode': mode,
+      'uids': uids,
+    });
   }
 
   /// Naya status lagao. visibleTo = wo uids jo isay dekh sakte hain.

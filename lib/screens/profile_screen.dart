@@ -27,6 +27,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool? _showPresence; // null = Firestore ki value use hogi
   String? _photoOverride; // nayi photo ('' = hata di gayi)
   bool _uploading = false;
+  String? _nameOverride; // naya naam (nickname)
+  bool _savingName = false;
 
   void _snack(String text) {
     if (!mounted) return;
@@ -59,6 +61,56 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _snack('Could not remove photo. Try again.');
     } finally {
       if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _editName(String current) async {
+    if (_savingName) return;
+    final c = TextEditingController(text: current);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cream,
+        title: const Text(
+          'Edit name',
+          style: TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          maxLength: 30,
+          textCapitalization: TextCapitalization.words,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.brown700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, c.text.trim()),
+            child: const Text('Save',
+                style: TextStyle(
+                    color: AppColors.gold700, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (newName == null || newName == current) return;
+
+    setState(() => _savingName = true);
+    try {
+      await chatRepo.setMyName(newName);
+      if (mounted) setState(() => _nameOverride = newName);
+      _snack('Name updated.');
+    } catch (e) {
+      debugPrint('NAME ERROR: $e');
+      _snack('Could not update name. Try again.');
+    } finally {
+      if (mounted) setState(() => _savingName = false);
     }
   }
 
@@ -173,7 +225,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     snap.connectionState != ConnectionState.done &&
                         data == null;
                 final username = (data?['username'] as String?) ?? '';
-                final name = (data?['name'] as String?) ?? '';
+                final name =
+                    _nameOverride ?? ((data?['name'] as String?) ?? '');
                 final photo =
                     _photoOverride ?? ((data?['photoUrl'] as String?) ?? '');
                 final shownName = name.isNotEmpty ? name : username;
@@ -296,6 +349,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             icon: Icons.person_outline,
                             label: 'Name',
                             value: name.isEmpty ? '-' : name,
+                            onEdit: loading ? null : () => _editName(name),
                           ),
                           _divider(),
                           _InfoRow(
@@ -303,6 +357,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             label: 'Email',
                             value: email.isEmpty ? '-' : email,
                           ),
+
                         ],
                       ),
                     ),
@@ -395,11 +450,13 @@ class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;
   final String value;
+  final VoidCallback? onEdit;
 
   const _InfoRow({
     required this.icon,
     required this.label,
     required this.value,
+    this.onEdit,
   });
 
   @override
@@ -435,6 +492,14 @@ class _InfoRow extends StatelessWidget {
               ],
             ),
           ),
+          if (onEdit != null)
+            IconButton(
+              tooltip: 'Edit',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.edit_outlined,
+                  size: 20, color: AppColors.gold700),
+              onPressed: onEdit,
+            ),
         ],
       ),
     );

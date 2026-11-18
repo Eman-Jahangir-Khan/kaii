@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
 
 /// Poori app mein yehi ek instance use hoga
@@ -224,70 +227,70 @@ class ChatRepository {
   }
 
   ChatLink linkFromData(Map<String, dynamic>? d) {
-  if (d == null) return ChatLink.none;
-  final status = d['status'] as String?;
-  // purani chats (status nahi) accepted maani jati hain
-  if (status == null || status == 'accepted') return ChatLink.accepted;
-  final by = d['requestedBy'] as String?;
-  if (status == 'pending') {
-  return by == _uid ? ChatLink.requestSent : ChatLink.requestReceived;
-  }
-  if (status == 'rejected') {
-  return by == _uid ? ChatLink.declined : ChatLink.none;
-  }
-  return ChatLink.none;
+    if (d == null) return ChatLink.none;
+    final status = d['status'] as String?;
+    // purani chats (status nahi) accepted maani jati hain
+    if (status == null || status == 'accepted') return ChatLink.accepted;
+    final by = d['requestedBy'] as String?;
+    if (status == 'pending') {
+      return by == _uid ? ChatLink.requestSent : ChatLink.requestReceived;
+    }
+    if (status == 'rejected') {
+      return by == _uid ? ChatLink.declined : ChatLink.none;
+    }
+    return ChatLink.none;
   }
 
   Future<ChatLink> linkWith(String otherUid) async {
-  final doc = await _db.collection('chats').doc(chatIdWith(otherUid)).get();
-  return linkFromData(doc.data());
+    final doc = await _db.collection('chats').doc(chatIdWith(otherUid)).get();
+    return linkFromData(doc.data());
   }
 
   Future<Map<String, ChatLink>> linksFor(List<String> uids) async {
-  final entries = await Future.wait(
-  uids.map((u) async => MapEntry(u, await linkWith(u))),
-  );
-  return Map.fromEntries(entries);
+    final entries = await Future.wait(
+      uids.map((u) async => MapEntry(u, await linkWith(u))),
+    );
+    return Map.fromEntries(entries);
   }
 
   /// Request bhejo. Samne wala pehle hi request bhej chuka ho to accept ho jati hai.
   Future<ChatLink> sendRequest(String otherUid) async {
-  final ref = _db.collection('chats').doc(chatIdWith(otherUid));
-  final snap = await ref.get();
-  final link = linkFromData(snap.data());
+    final ref = _db.collection('chats').doc(chatIdWith(otherUid));
+    final snap = await ref.get();
+    final link = linkFromData(snap.data());
 
-  if (link == ChatLink.none) {
-  final participants = [_uid, otherUid]..sort();
-  await ref.set({
-  'participants': participants,
-  'status': 'pending',
-  'requestedBy': _uid,
-  'lastMessage': '',
-  'lastMessageAt': FieldValue.serverTimestamp(),
-  'lastSenderId': _uid,
-  'unread': {_uid: 0, otherUid: 0},
-  });
-  return ChatLink.requestSent;
-  }
-  if (link == ChatLink.requestReceived) {
-  await acceptRequest(otherUid);
-  return ChatLink.accepted;
-  }
-  return link;
+    if (link == ChatLink.none) {
+      final participants = [_uid, otherUid]..sort();
+      await ref.set({
+        'participants': participants,
+        'status': 'pending',
+        'requestedBy': _uid,
+        'lastMessage': '',
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastSenderId': _uid,
+        'unread': {_uid: 0, otherUid: 0},
+      });
+      return ChatLink.requestSent;
+    }
+    if (link == ChatLink.requestReceived) {
+      await acceptRequest(otherUid);
+      return ChatLink.accepted;
+    }
+    return link;
   }
 
   Future<void> acceptRequest(String otherUid) {
-  return _db.collection('chats').doc(chatIdWith(otherUid)).update({
-  'status': 'accepted',
-  'lastMessageAt': FieldValue.serverTimestamp(),
-  });
+    return _db.collection('chats').doc(chatIdWith(otherUid)).update({
+      'status': 'accepted',
+      'lastMessageAt': FieldValue.serverTimestamp(),
+    });
   }
 
   Future<void> rejectRequest(String otherUid) {
-  return _db
-      .collection('chats')
-      .doc(chatIdWith(otherUid))
-      .update({'status': 'rejected'});
+    return _db
+        .collection('chats')
+        .doc(chatIdWith(otherUid))
+        .update({'status': 'rejected'});
   }
 
   /// Chat ko mere liye pin / unpin karo (har user ki apni pin)
@@ -506,6 +509,69 @@ class ChatRepository {
     return data;
   }
 
+  /// Apna naam (nickname) badlo. Khali string = nickname hata do (username dikhega)
+  Future<void> setMyName(String name) async {
+    final value = name.trim();
+    await _db.collection('users').doc(_uid).update({'name': value});
+    // cache purana na rahe, warna naya naam foran nazar nahi aayega
+    final c = _userCache[_uid];
+    if (c != null) _userCache[_uid] = {...c, 'name': value};
+  }
+
+  // ---------------------------------------------------------------
+  // Contact names: kisi ka naam sirf apne liye save karo (Instagram jaisa)
+  // Firestore: users/{meri uid}/contacts/{uski uid}  ->  {name: '...'}
+  // ---------------------------------------------------------------
+
+  /// uid -> mera save kiya hua naam. Screens isay sun kar rebuild hoti hain.
+  final ValueNotifier<Map<String, String>> contactNames = ValueNotifier({});
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _contactNamesSub;
+
+  /// Login ke baad ek baar chalao (HomeScreen.initState mein)
+  void startContactNames() {
+    _contactNamesSub?.cancel();
+    contactNames.value = {};
+    _contactNamesSub = _db
+        .collection('users')
+        .doc(_uid)
+        .collection('contacts')
+        .snapshots()
+        .listen((snap) {
+      final m = <String, String>{};
+      for (final d in snap.docs) {
+        final n = ((d.data()['name'] as String?) ?? '').trim();
+        if (n.isNotEmpty) m[d.id] = n;
+      }
+      contactNames.value = m;
+    }, onError: (e) => debugPrint('CONTACT NAMES ERROR: $e'));
+  }
+
+  /// Khali naam = save kiya hua naam hata do
+  Future<void> setContactName(String otherUid, String name) async {
+    final ref =
+    _db.collection('users').doc(_uid).collection('contacts').doc(otherUid);
+    final v = name.trim();
+    if (v.isEmpty) {
+      await ref.delete();
+    } else {
+      await ref.set({'name': v});
+    }
+  }
+
+  /// Mere liye dikhane wala naam: mera save kiya hua naam > uska nickname > username
+  String displayName(
+      String uid,
+      Map<String, dynamic>? user, {
+        String fallback = '',
+      }) {
+    final saved = (contactNames.value[uid] ?? '').trim();
+    if (saved.isNotEmpty) return saved;
+    final nick = ((user?['name'] as String?) ?? '').trim();
+    if (nick.isNotEmpty) return nick;
+    final un = ((user?['username'] as String?) ?? '').trim();
+    return un.isNotEmpty ? un : fallback;
+  }
+
   /// Meri online / last seen halat likho
   Future<void> setPresence(bool online) {
     return _db.collection('users').doc(_uid).set({
@@ -542,5 +608,3 @@ class ChatRepository {
     return _db.collection('users').doc(uid).snapshots();
   }
 }
-
-

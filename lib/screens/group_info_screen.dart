@@ -27,6 +27,9 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
 
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  _userSubs = {};
+  final Map<String, Map<String, dynamic>> _liveUsers = {};
   Map<String, dynamic> _group = {};
   bool _loaded = false;
   bool _busy = false;
@@ -35,6 +38,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   @override
   void initState() {
     super.initState();
+    chatRepo.contactNames.addListener(_onNames);
     _sub = groupRepo.groupDocStream(widget.groupId).listen(
           (snap) {
         if (!mounted) return;
@@ -70,7 +74,11 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
 
   @override
   void dispose() {
+    chatRepo.contactNames.removeListener(_onNames);
     _sub?.cancel();
+    for (final s in _userSubs.values) {
+      s.cancel();
+    }
     super.dispose();
   }
 
@@ -80,6 +88,18 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   bool get _amAdmin => _isMember && _admins.contains(_myUid);
 
   void _ensureUsers() {
+    for (final u in _members) {
+      if (_userSubs.containsKey(u)) continue;
+      _userSubs[u] = FirebaseFirestore.instance
+          .collection('users')
+          .doc(u)
+          .snapshots()
+          .listen((s) {
+        final data = s.data();
+        if (!mounted || data == null) return;
+        setState(() => _liveUsers[u] = data);
+      }, onError: (_) {});
+    }
     final missing = _members.where((u) => chatRepo.cachedUser(u) == null);
     if (missing.isEmpty) return;
     Future.wait(
@@ -89,8 +109,20 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
     });
   }
 
+  /// Live data (agar aa chuka ho), warna cache wala
+  Map<String, dynamic>? _userData(String uid) =>
+      _liveUsers[uid] ?? chatRepo.cachedUser(uid);
+
   String _username(String uid) =>
-      (chatRepo.cachedUser(uid)?['username'] as String?) ?? '';
+      ((_userData(uid)?['username'] as String?) ?? '').trim();
+
+  void _onNames() {
+    if (mounted) setState(() {});
+  }
+
+  /// Mera save kiya naam > nickname > username
+  String _displayName(String uid) =>
+      chatRepo.displayName(uid, _userData(uid));
 
   void _snack(String text) {
     if (!mounted) return;
@@ -202,6 +234,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
     if (!_amAdmin || uid == _myUid) return;
     final isAdmin = _admins.contains(uid);
     final name = _username(uid);
+    final shown = _displayName(uid);
     showModalBottomSheet(
       context: context,
       builder: (ctx) => SafeArea(
@@ -228,7 +261,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
             ListTile(
               leading:
               const Icon(Icons.person_remove_outlined, color: Colors.red),
-              title: Text('Remove $name',
+              title: Text('Remove $shown',
                   style: const TextStyle(color: Colors.red)),
               onTap: () {
                 Navigator.pop(ctx);
@@ -282,8 +315,8 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   // -------------------------------------------------------------------- UI
 
   Widget _memberTile(String uid) {
-    final u = chatRepo.cachedUser(uid);
-    final username = (u?['username'] as String?) ?? '';
+    final u = _userData(uid);
+    final username = _displayName(uid);
     final photo = (u?['photoUrl'] as String?) ?? '';
     final about = (u?['about'] as String?) ?? '';
     final isAdmin = _admins.contains(uid);
@@ -366,7 +399,7 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
       final aa = _admins.contains(a) ? 0 : 1;
       final bb = _admins.contains(b) ? 0 : 1;
       if (aa != bb) return aa - bb;
-      return _username(a).compareTo(_username(b));
+      return _displayName(a).compareTo(_displayName(b));
     });
 
     return Scaffold(
@@ -476,17 +509,17 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                 const SizedBox(height: 14),
                 if (_isMember)
                   TextButton.icon(
-                  onPressed: _busy ? null : _leave,
-                  icon: const Icon(Icons.logout, color: Colors.red),
-                  label: const Text(
-                    'Leave group',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
+                    onPressed: _busy ? null : _leave,
+                    icon: const Icon(Icons.logout, color: Colors.red),
+                    label: const Text(
+                      'Leave group',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
           ),

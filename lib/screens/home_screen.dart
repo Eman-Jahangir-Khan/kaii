@@ -47,7 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (user != null) {
       NotificationService.instance.init(user.uid);
     }
-      presenceService.start();
+    chatRepo.startContactNames();
+    presenceService.start();
     _sub = chatRepo.chatsStream().listen(
       _onSnapshot,
       onError: (_) {
@@ -222,7 +223,11 @@ class _HomeScreenState extends State<HomeScreen> {
       final u = chatRepo.cachedUser(_otherUidOf(d));
       final username = ((u?['username'] as String?) ?? '').toLowerCase();
       final name = ((u?['name'] as String?) ?? '').toLowerCase();
-      return username.contains(_query) || name.contains(_query);
+      final saved =
+      (chatRepo.contactNames.value[_otherUidOf(d)] ?? '').toLowerCase();
+      return username.contains(_query) ||
+          name.contains(_query) ||
+          saved.contains(_query);
     }).toList();
     return [
       ...list.where(_isPinned),
@@ -672,7 +677,6 @@ class _ChatTile extends StatefulWidget {
 
 class _ChatTileState extends State<_ChatTile> {
   late final String _otherUid;
-  late final Future<Map<String, dynamic>?> _future;
 
   // ---- typing ----
   Object? _lastTypingStamp;
@@ -697,8 +701,12 @@ class _ChatTileState extends State<_ChatTile> {
           (u) => u != widget.myUid,
       orElse: () => widget.myUid,
     );
-    _future = chatRepo.getUser(_otherUid);
     _lastTypingStamp = _typingStampOf(widget.data); // purana stamp ignore
+    chatRepo.contactNames.addListener(_onNames);
+  }
+
+  void _onNames() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -721,6 +729,7 @@ class _ChatTileState extends State<_ChatTile> {
 
   @override
   void dispose() {
+    chatRepo.contactNames.removeListener(_onNames);
     _typingTimer?.cancel();
     super.dispose();
   }
@@ -758,15 +767,21 @@ class _ChatTileState extends State<_ChatTile> {
       }
     }
 
-    return FutureBuilder<Map<String, dynamic>?>(
-      future: _future,
-      initialData: chatRepo.cachedUser(_otherUid),
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: chatRepo.userStream(_otherUid),
       builder: (context, snap) {
-        final user = snap.data;
-        final username = (user?['username'] as String?) ??
-            (snap.connectionState == ConnectionState.done
-                ? 'Unknown user'
-                : '...');
+        final user = snap.data?.data() ?? chatRepo.cachedUser(_otherUid);
+        final realUsername = ((user?['username'] as String?) ?? '').trim();
+        final nickname = ((user?['name'] as String?) ?? '').trim();
+        // mera save kiya naam > nickname > @username
+        final username = chatRepo.displayName(
+          _otherUid,
+          user,
+          fallback: user == null &&
+              snap.connectionState != ConnectionState.waiting
+              ? 'Unknown user'
+              : '...',
+        );
         final photo = (user?['photoUrl'] as String?) ?? '';
 
         return Container(
@@ -820,7 +835,7 @@ class _ChatTileState extends State<_ChatTile> {
                               MaterialPageRoute(
                                 builder: (_) => ContactScreen(
                                   uid: _otherUid,
-                                  username: username,
+                                  username: realUsername,
                                   photoUrl: photo,
                                 ),
                               ),
@@ -894,18 +909,18 @@ class _ChatTileState extends State<_ChatTile> {
                           else
                             Text(
                               isCleared || previewText.isEmpty
-                                ? ''
-                                : (previewMine
-                                ? 'You: $previewText'
-                                : previewText),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: AppColors.brown700,
-                              fontWeight:
-                              isUnread ? FontWeight.w700 : FontWeight.w400,
+                                  ? ''
+                                  : (previewMine
+                                  ? 'You: $previewText'
+                                  : previewText),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: AppColors.brown700,
+                                fontWeight:
+                                isUnread ? FontWeight.w700 : FontWeight.w400,
+                              ),
                             ),
-                          ),
                         ],
                       ),
                     ),

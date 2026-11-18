@@ -122,6 +122,7 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
     super.initState();
     if (widget.isVideo) _initVideo();
     _loadContacts();
+    _loadDefaultPrivacy();
   }
 
   @override
@@ -172,6 +173,24 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
     }
   }
 
+  /// Status privacy screen mein jo default chuna ho wohi pehle se select ho
+  Future<void> _loadDefaultPrivacy() async {
+    try {
+      final p = await statusRepo.getPrivacy();
+      if (!mounted) return;
+      setState(() {
+        _vis = switch (p.mode) {
+          'only' => _Vis.only,
+          'except' => _Vis.except,
+          _ => _Vis.contacts,
+        };
+        _picked = p.uids.toSet();
+      });
+    } catch (e) {
+      debugPrint('load default privacy error: $e');
+    }
+  }
+
   Future<void> _chooseContacts() async {
     final res = await showModalBottomSheet<Set<String>>(
       context: context,
@@ -180,7 +199,7 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => _ContactPicker(
+      builder: (_) => ContactPicker(
         contacts: _contacts,
         initial: _picked,
         title: _vis == _Vis.only ? 'Share with' : 'Hide from',
@@ -415,22 +434,23 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
   }
 }
 
-/// Contacts ki checklist (bottom sheet)
-class _ContactPicker extends StatefulWidget {
+/// Contacts ki checklist (bottom sheet). Privacy screen mein bhi use hoti hai.
+class ContactPicker extends StatefulWidget {
   final List<Map<String, String>> contacts;
   final Set<String> initial;
   final String title;
-  const _ContactPicker({
+  const ContactPicker({
+    super.key,
     required this.contacts,
     required this.initial,
     required this.title,
   });
 
   @override
-  State<_ContactPicker> createState() => _ContactPickerState();
+  State<ContactPicker> createState() => _ContactPickerState();
 }
 
-class _ContactPickerState extends State<_ContactPicker> {
+class _ContactPickerState extends State<ContactPicker> {
   late final Set<String> _sel = {...widget.initial};
 
   @override

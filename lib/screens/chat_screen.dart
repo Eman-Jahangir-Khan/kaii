@@ -118,6 +118,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _otherOnlineFlag = false;
   DateTime? _otherLastSeen;
   bool _otherHidesPresence = false;
+  Map<String, dynamic>? _otherData; // samne wale ka live user doc
   // ---- typing ----
   // meri taraf (likhne wala)
   bool _iAmTyping = false;
@@ -186,6 +187,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _onTypingChanged();
     });
 
+    chatRepo.contactNames.addListener(_onNames);
     _start();
 
     // Har second countdown refresh + expired messages saaf
@@ -227,6 +229,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final d = doc.data();
       if (!mounted) return;
       setState(() {
+        _otherData = d;
         _otherOnlineFlag = d?['online'] == true;
         _otherLastSeen = (d?['lastSeen'] as Timestamp?)?.toDate();
         _otherHidesPresence = d?['hidePresence'] == true;
@@ -277,8 +280,26 @@ class _ChatScreenState extends State<ChatScreen> {
     return t == null || t.compareTo(cut) > 0;
   }
 
+  void _onNames() {
+    if (mounted) setState(() {});
+  }
+
+  /// Mera save kiya naam > uska nickname > username
+  String get _shownName => chatRepo.displayName(
+    widget.otherUid,
+    _otherData,
+    fallback: widget.username,
+  );
+
+  /// Asli @username (Contact screen ko chahiye)
+  String get _realUsername {
+    final u = ((_otherData?['username'] as String?) ?? '').trim();
+    return u.isNotEmpty ? u : widget.username;
+  }
+
   @override
   void dispose() {
+    chatRepo.contactNames.removeListener(_onNames);
     _sub?.cancel();
     _chatSub?.cancel();
     _searchCtrl.dispose();
@@ -971,7 +992,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _systemLabel(Map<String, dynamic> m) {
-    final who = m['senderId'] == _myUid ? 'You' : widget.username;
+    final who = m['senderId'] == _myUid ? 'You' : _shownName;
     final n = (m['count'] as num?)?.toInt() ?? 1;
     return n == 1 ? '$who pinned a message' : '$who pinned $n messages';
   }
@@ -1285,7 +1306,7 @@ class _ChatScreenState extends State<ChatScreen> {
       MaterialPageRoute(
         builder: (_) => ContactScreen(
           uid: widget.otherUid,
-          username: widget.username,
+          username: _realUsername,
           photoUrl: widget.photoUrl,
         ),
       ),
@@ -1650,7 +1671,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: GradientHeader(
                 title: _msgSelecting
                     ? '${_selectedDocs.length} selected'
-                    : widget.username,
+                    : _shownName,
                 subtitle: _msgSelecting ? null : _headerStatus,
                 titleStyle:
                 const TextStyle(fontSize: 18, color: Colors.black),
@@ -1661,7 +1682,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   onPressed: _clearMsgSelection,
                 )
                     : UserAvatar(
-                  username: widget.username,
+                  username: _shownName,
                   photoUrl: widget.photoUrl,
                   size: 40,
                 ),
@@ -1714,7 +1735,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (msgs.isEmpty) {
       return EmptyState(
         icon: Icons.waving_hand_outlined,
-        title: 'Say hi to ${widget.username}',
+        title: 'Say hi to $_shownName',
         subtitle: 'Send a message to start the chat.',
       );
     }
@@ -1748,79 +1769,79 @@ class _ChatScreenState extends State<ChatScreen> {
             if (m['type'] == 'system')
               _DateChip(label: _systemLabel(m))
             else
-            KeyedSubtree(
-              key: _keys.putIfAbsent(doc.id, () => GlobalKey()),
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onLongPress: () => _toggleMsg(doc.id),
-                onTap: _msgSelecting ? () => _toggleMsg(doc.id) : null,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  color: _selectedMsgs.contains(doc.id)
-                      ? AppColors.gold400.withValues(alpha: 0.3)
-                      : (doc.id == _flashId
-                      ? AppColors.gold400.withValues(alpha: 0.45)
-                      : AppColors.gold400.withValues(alpha: 0.0)),
-                  child: Column(
-                    children: [
-                      if (_selectedMsgs.length == 1 &&
-                          _selectedMsgs.contains(doc.id) &&
-                          m['deletedForAll'] != true)
-                        Align(
-                          alignment: m['senderId'] == _myUid
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: _reactionBar(),
-                        ),
-                      _SwipeToReply(
-                        enabled: !_msgSelecting && m['deletedForAll'] != true,
-                        onReply: () => _startReply(doc),
-                        child: _Bubble(
-                          onImageTap: _openImage,
-                          data: m,
-                          mine: m['senderId'] == _myUid,
-                          pending: doc.metadata.hasPendingWrites || created == null,
-                          time: created,
-                          expiresAt: (m['expiresAt'] as Timestamp?)?.toDate(),
-                          now: now,
-                          highlight: _searchQuery,
-                          current: doc.id == currentId,
-                          replyName: (m['replyTo'] is Map &&
-                              (m['replyTo'] as Map)['isStatus'] == true)
-                              ? 'Status'
-                              : (m['replyTo'] is Map &&
-                              (m['replyTo'] as Map)['senderId'] == _myUid)
-                              ? 'You'
-                              : widget.username,
-                          onReplyTap: m['replyTo'] is! Map
-                              ? null
-                              : (m['replyTo'] as Map)['isStatus'] == true
-                              ? () => _openStatusFromReply(
-                              (m['replyTo'] as Map)['id'] as String)
-                              : () => _jumpToMessage(
-                              (m['replyTo'] as Map)['id'] as String),
-                        ),
-                      ),
-                      if (m['reactions'] is Map &&
-                          (m['reactions'] as Map).isNotEmpty &&
-                          m['deletedForAll'] != true)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                          child: Align(
+              KeyedSubtree(
+                key: _keys.putIfAbsent(doc.id, () => GlobalKey()),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onLongPress: () => _toggleMsg(doc.id),
+                  onTap: _msgSelecting ? () => _toggleMsg(doc.id) : null,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    color: _selectedMsgs.contains(doc.id)
+                        ? AppColors.gold400.withValues(alpha: 0.3)
+                        : (doc.id == _flashId
+                        ? AppColors.gold400.withValues(alpha: 0.45)
+                        : AppColors.gold400.withValues(alpha: 0.0)),
+                    child: Column(
+                      children: [
+                        if (_selectedMsgs.length == 1 &&
+                            _selectedMsgs.contains(doc.id) &&
+                            m['deletedForAll'] != true)
+                          Align(
                             alignment: m['senderId'] == _myUid
                                 ? Alignment.centerRight
                                 : Alignment.centerLeft,
-                            child: _ReactionPill(
-                              reactions: m['reactions'] as Map,
-                              myUid: _myUid,
-                            ),
+                            child: _reactionBar(),
+                          ),
+                        _SwipeToReply(
+                          enabled: !_msgSelecting && m['deletedForAll'] != true,
+                          onReply: () => _startReply(doc),
+                          child: _Bubble(
+                            onImageTap: _openImage,
+                            data: m,
+                            mine: m['senderId'] == _myUid,
+                            pending: doc.metadata.hasPendingWrites || created == null,
+                            time: created,
+                            expiresAt: (m['expiresAt'] as Timestamp?)?.toDate(),
+                            now: now,
+                            highlight: _searchQuery,
+                            current: doc.id == currentId,
+                            replyName: (m['replyTo'] is Map &&
+                                (m['replyTo'] as Map)['isStatus'] == true)
+                                ? 'Status'
+                                : (m['replyTo'] is Map &&
+                                (m['replyTo'] as Map)['senderId'] == _myUid)
+                                ? 'You'
+                                : _shownName,
+                            onReplyTap: m['replyTo'] is! Map
+                                ? null
+                                : (m['replyTo'] as Map)['isStatus'] == true
+                                ? () => _openStatusFromReply(
+                                (m['replyTo'] as Map)['id'] as String)
+                                : () => _jumpToMessage(
+                                (m['replyTo'] as Map)['id'] as String),
                           ),
                         ),
-                    ],
+                        if (m['reactions'] is Map &&
+                            (m['reactions'] as Map).isNotEmpty &&
+                            m['deletedForAll'] != true)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+                            child: Align(
+                              alignment: m['senderId'] == _myUid
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: _ReactionPill(
+                                reactions: m['reactions'] as Map,
+                                myUid: _myUid,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
           ],
         );
       },
@@ -1926,7 +1947,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             Text(
                               _replyTo!['senderId'] == _myUid
                                   ? 'Replying to yourself'
-                                  : 'Replying to ${widget.username}',
+                                  : 'Replying to $_shownName',
                               style: const TextStyle(
                                 color: AppColors.gold700,
                                 fontSize: 12.5,

@@ -391,7 +391,7 @@ class _NavBadge extends StatelessWidget {
   final bool showCount;
   const _NavBadge({required this.count, required this.showCount});
 
-  static const _red = Color(0xFFE53935);
+  static const _red = Color(0xFFA67917);
 
   @override
   Widget build(BuildContext context) {
@@ -417,7 +417,7 @@ class _NavBadge extends StatelessWidget {
         border: Border.all(color: AppColors.brown900, width: 1.5),
       ),
       child: Text(
-        count > 99 ? '99+' : '$count',
+        count > 9 ? '9+' : '$count',
         style: const TextStyle(
           color: Colors.white,
           fontSize: 10,

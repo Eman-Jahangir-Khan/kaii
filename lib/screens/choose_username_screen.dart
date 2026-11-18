@@ -38,7 +38,7 @@ class _ChooseUsernameScreenState extends State<ChooseUsernameScreen> {
   String? _validateUsername(String? value) {
     final name = value?.trim() ?? '';
     if (name.isEmpty) return 'Username is required';
-    if (name.length < 3) return 'At least 3 characters';
+    if (name.length < 6) return 'At least 6 characters';
     if (name.startsWith('.') || name.endsWith('.')) {
       return 'Username cannot start or end with a dot';
     }
@@ -97,7 +97,7 @@ class _ChooseUsernameScreenState extends State<ChooseUsernameScreen> {
                 controller: _username,
                 label: 'Username',
                 icon: Icons.alternate_email,
-                helper: '3-20 characters: small letters, numbers, underscore, dot',
+                helper: '6-20 characters: small letters, numbers, underscore, dot',
                 inputFormatters: [
                   _LowerCaseFormatter(), // sab se pehle lowercase, phir filter
                   FilteringTextInputFormatter.allow(RegExp(r'[a-z0-9_.]')),

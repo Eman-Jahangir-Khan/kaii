@@ -48,7 +48,7 @@ class _SignupScreenState extends State<SignupScreen> {
   String? _validateUsername(String? value) {
     final name = value?.trim() ?? '';
     if (name.isEmpty) return 'Username is required';
-    if (name.length < 3) return 'At least 3 characters';
+    if (name.length < 6) return 'At least 6 characters';
     if (name.startsWith('.') || name.endsWith('.')) {
       return 'Username cannot start or end with a dot';
     }
