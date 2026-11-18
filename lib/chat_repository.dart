@@ -543,7 +543,13 @@ class ChatRepository {
         if (n.isNotEmpty) m[d.id] = n;
       }
       contactNames.value = m;
-    }, onError: (e) => debugPrint('CONTACT NAMES ERROR: $e'));
+    }, onError: (e) {
+      debugPrint('CONTACT NAMES ERROR: $e');
+      // Error ke baad listener band ho jata hai, isliye thori der baad dobara
+      Future.delayed(const Duration(seconds: 15), () {
+        if (FirebaseAuth.instance.currentUser != null) startContactNames();
+      });
+    });
   }
 
   /// Khali naam = save kiya hua naam hata do
@@ -556,6 +562,14 @@ class ChatRepository {
     } else {
       await ref.set({'name': v});
     }
+    // listener ka intezar kiye bina foran screens mein dikhao
+    final m = Map<String, String>.from(contactNames.value);
+    if (v.isEmpty) {
+      m.remove(otherUid);
+    } else {
+      m[otherUid] = v;
+    }
+    contactNames.value = m;
   }
 
   /// Mere liye dikhane wala naam: mera save kiya hua naam > uska nickname > username

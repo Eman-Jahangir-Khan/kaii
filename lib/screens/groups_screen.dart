@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'group_info_screen.dart';
+import '../chat_repository.dart';
 import '../group_repository.dart';
 import '../message_widgets.dart';
 import '../theme.dart';
@@ -23,6 +24,10 @@ class GroupsScreen extends StatefulWidget {
 }
 
 class _GroupsScreenState extends State<GroupsScreen> {
+  // last message bhejne walon ke live user docs
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  _userSubs = {};
+  final Map<String, Map<String, dynamic>> _liveUsers = {};
   final String _myUid = FirebaseAuth.instance.currentUser!.uid;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _docs = [];
@@ -36,6 +41,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
   @override
   void initState() {
     super.initState();
+    chatRepo.contactNames.addListener(_onNames);
     _sub = groupRepo.groupsStream().listen(
           (snap) {
         if (!mounted) return;
@@ -44,6 +50,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
           _loaded = true;
           _failed = false;
         });
+        _watchSenders(snap.docs);
       },
       onError: (e) {
         debugPrint('GROUPS STREAM ERROR: $e'); // index ka link yahin milega
@@ -58,11 +65,44 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   @override
   void dispose() {
+    chatRepo.contactNames.removeListener(_onNames);
+    for (final sub in _userSubs.values) {
+      sub.cancel();
+    }
     _sub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
     groupsSelecting.value = false;
   }
+
+  void _onNames() {
+    if (mounted) setState(() {});
+  }
+
+  void _watchSenders(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    for (final d in docs) {
+      final g = d.data();
+      final ids = <String>{(g['lastSenderId'] as String?) ?? ''};
+      final mp = g['myPreview'];
+      final mine = mp is Map ? mp[_myUid] : null;
+      if (mine is Map) ids.add((mine['senderId'] as String?) ?? '');
+      for (final u in ids) {
+        if (u.isEmpty || u == _myUid || _userSubs.containsKey(u)) continue;
+        _userSubs[u] = chatRepo.userStream(u).listen((s) {
+          final data = s.data();
+          if (!mounted || data == null) return;
+          setState(() => _liveUsers[u] = data);
+        }, onError: (_) {});
+      }
+    }
+  }
+
+  /// Mera save kiya naam > nickname > username > (group doc mein likha purana naam)
+  String _nameOf(String uid, {String fallback = ''}) => chatRepo.displayName(
+    uid,
+    _liveUsers[uid] ?? chatRepo.cachedUser(uid),
+    fallback: fallback,
+  );
 
   void _create() {
     Navigator.of(context).push(
@@ -248,7 +288,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
         if (text.isEmpty) return '';
         if (sid.isEmpty) return text;
         if (sid == _myUid) return 'You: $text';
-        return sname.isEmpty ? text : '$sname: $text';
+        final shown = _nameOf(sid, fallback: sname);
+        return shown.isEmpty ? text : '$shown: $text';
       }
     }
     final msg = (g['lastMessage'] as String?) ?? '';
@@ -256,7 +297,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final senderName = (g['lastSenderName'] as String?) ?? '';
     if (senderId.isEmpty) return msg; // system message
     if (senderId == _myUid) return 'You: $msg';
-    return senderName.isEmpty ? msg : '$senderName: $msg';
+    final shown = _nameOf(senderId, fallback: senderName);
+    return shown.isEmpty ? msg : '$shown: $msg';
   }
 
   String _time(Timestamp? ts) {

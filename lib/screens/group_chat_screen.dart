@@ -54,6 +54,10 @@ class GroupChatScreen extends StatefulWidget {
 }
 
 class _GroupChatScreenState extends State<GroupChatScreen> {
+  // members ke live user docs (nickname badle to foran nazar aaye)
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  _userSubs = {};
+  final Map<String, Map<String, dynamic>> _liveUsers = {};
   static const _reactions = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
   final String _myUid = FirebaseAuth.instance.currentUser!.uid;
@@ -123,6 +127,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   @override
   void initState() {
     super.initState();
+    chatRepo.contactNames.addListener(_onNames);
     _controller.addListener(_onTextChanged);
     _groupSub = groupRepo.groupDocStream(widget.groupId).listen(
       _onGroup,
@@ -152,6 +157,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
   @override
   void dispose() {
+    chatRepo.contactNames.removeListener(_onNames);
+    for (final sub in _userSubs.values) {
+      sub.cancel();
+    }
     _stopTyping();
     _typingTimer?.cancel();
     _tick?.cancel();
@@ -260,7 +269,36 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
 
 
   /// Typing / naam dikhane ke liye members ke usernames cache mein le aao
+  void _onNames() {
+    if (mounted) setState(() {});
+  }
+
+  /// Mera save kiya naam > nickname > username > (message mein likha purana naam)
+  String _nameOf(String uid, {String fallback = ''}) => chatRepo.displayName(
+    uid,
+    _liveUsers[uid] ?? chatRepo.cachedUser(uid),
+    fallback: fallback,
+  );
+
+  /// Message ka senderName dikhane se pehle sahi naam se badal do
+  Map<String, dynamic> _withName(Map<String, dynamic> m) {
+    final sid = m['senderId'];
+    if (sid is! String || sid == _myUid) return m;
+    return {
+      ...m,
+      'senderName': _nameOf(sid, fallback: (m['senderName'] as String?) ?? ''),
+    };
+  }
+
   void _ensureUsers(List<String> members) {
+    for (final u in members) {
+      if (u == _myUid || _userSubs.containsKey(u)) continue;
+      _userSubs[u] = chatRepo.userStream(u).listen((s) {
+        final data = s.data();
+        if (!mounted || data == null) return;
+        setState(() => _liveUsers[u] = data);
+      }, onError: (_) {});
+    }
     final missing = members.where((u) => chatRepo.cachedUser(u) == null);
     if (missing.isEmpty) return;
     Future.wait(
@@ -290,8 +328,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       t.forEach((uid, ts) {
         if (uid == _myUid || ts is! Timestamp) return;
         if (now.difference(ts.toDate()).inSeconds > 8) return;
-        final n = chatRepo.cachedUser(uid as String)?['username'] as String?;
-        if (n != null && n.isNotEmpty) names.add(n);
+        final n = _nameOf(uid as String);
+        if (n.isNotEmpty) names.add(n);
       });
     }
     if (names.length == 1) return '${names.first} is typing…';
@@ -1342,7 +1380,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final m = pins[i].data();
     final body =
     m['type'] == 'image' ? '📷 Photo' : ((m['text'] as String?) ?? '');
-    final sender = (m['senderName'] as String?) ?? '';
+    final pinSid = (m['senderId'] as String?) ?? '';
+    final storedName = (m['senderName'] as String?) ?? '';
+    final sender = pinSid.isEmpty || pinSid == _myUid
+        ? storedName
+        : _nameOf(pinSid, fallback: storedName);
     final text = sender.isEmpty ? body : '$sender: $body';
 
     return Material(
@@ -1574,7 +1616,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         enabled: !_selecting && !deleted && _isMember,
                         onReply: () => _startReply(doc),
                         child: MessageBubble(
-                          data: m,
+                          data: _withName(m),
                           mine: mine,
                           pending:
                           doc.metadata.hasPendingWrites || created == null,
@@ -1585,7 +1627,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           replyName: reply is Map
                               ? (reply['senderId'] == _myUid
                               ? 'You'
-                              : ((reply['senderName'] as String?) ?? ''))
+                              : _nameOf(
+                            (reply['senderId'] as String?) ?? '',
+                            fallback:
+                            (reply['senderName'] as String?) ?? '',
+                          ))
                               : '',
                           onReplyTap: reply is Map
                               ? () => _jumpTo(reply['id'] as String)
@@ -1724,7 +1770,10 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                   icon: Icons.reply,
                   title: reply['senderId'] == _myUid
                       ? 'Replying to yourself'
-                      : 'Replying to ${reply['senderName']}',
+                      : 'Replying to ${_nameOf(
+                    (reply['senderId'] as String?) ?? '',
+                    fallback: (reply['senderName'] as String?) ?? '',
+                  )}',
                   body: (reply['text'] as String?) ?? '',
                   onClose: () => setState(() => _replyTo = null),
                 ),
