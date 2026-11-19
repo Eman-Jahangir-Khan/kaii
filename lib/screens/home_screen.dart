@@ -16,6 +16,8 @@ import 'new_chat_screen.dart';
 import 'requests_screen.dart';
 import '../photo_viewer.dart';
 import 'contact_screen.dart';
+import '../call_repository.dart';
+import 'incoming_call_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -28,6 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final String _myUid = authRepo.currentUser!.uid;
   final _searchCtrl = TextEditingController();
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _callSub;
 
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _docs = [];
   bool _ready = false;
@@ -49,6 +52,29 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     chatRepo.startContactNames();
     presenceService.start();
+    _callSub = callRepo.incomingCalls().listen((snap) {
+      debugPrint('CALL: ringing docs = ${snap.docs.length}');
+      for (final d in snap.docs) {
+        final m = d.data();
+        final t = (m['createdAt'] as Timestamp?)?.toDate();
+        debugPrint('CALL: ${d.id} createdAt=$t now=${DateTime.now()}');
+        if (t == null) continue;
+        // TEST ke liye ye time wali line abhi hata do:
+        // if (DateTime.now().difference(t).inSeconds > 60) continue;
+        if (callRepo.activeCallId == d.id) continue;
+        if (callRepo.activeCallId != null) {
+          callRepo.decline(d.id).catchError((_) {});
+          continue;
+        }
+        callRepo.activeCallId = d.id;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => IncomingCallScreen(callId: d.id, data: m),
+          ),
+        );
+        break;
+      }
+    }, onError: (e) => debugPrint('CALL LISTEN ERROR: $e'));
     _sub = chatRepo.chatsStream().listen(
       _onSnapshot,
       onError: (_) {
@@ -64,6 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _sub?.cancel();
+    _callSub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }

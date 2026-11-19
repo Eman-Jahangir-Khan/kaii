@@ -16,6 +16,7 @@ import 'contact_screen.dart';
 import 'forward_to_screen.dart';
 import '../status_repository.dart';
 import 'status_viewer_screen.dart';
+import 'call_screen.dart';
 
 class _ChatBg {
   final String key;
@@ -623,6 +624,32 @@ class _ChatScreenState extends State<ChatScreen> {
   // -------------------------------------------------------------------------
   // UI
   // -------------------------------------------------------------------------
+
+  List<Widget> _callButtons() {
+    if (_blockedByMe || _blockedByOther) return const [];
+    return [
+      IconButton(
+        tooltip: 'Voice call',
+        icon: const Icon(Icons.call_outlined, color: Colors.black),
+        onPressed: () => _startCall(false),
+      ),
+      IconButton(
+        tooltip: 'Video call',
+        icon: const Icon(Icons.videocam_outlined, color: Colors.black),
+        onPressed: () => _startCall(true),
+      ),
+    ];
+  }
+
+  void _startCall(bool video) {
+    placeCall(
+      context,
+      otherUid: widget.otherUid,
+      otherName: _shownName,
+      otherPhoto: widget.photoUrl,
+      video: video,
+    );
+  }
 
 
   Widget _chatMenu() {
@@ -1686,7 +1713,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   photoUrl: widget.photoUrl,
                   size: 40,
                 ),
-                actions: _msgSelecting ? _msgActions() : [_chatMenu()],
+                actions: _msgSelecting ? _msgActions() : [..._callButtons(), _chatMenu()],
               ),
             ),
             if (_searching) _searchField(),
