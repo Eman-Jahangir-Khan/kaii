@@ -46,7 +46,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   void _close() {
     if (_closing || !mounted) return;
     _closing = true;
-    Navigator.of(context).maybePop();
+    final route = ModalRoute.of(context);
+    if (route == null) return;
+    if (route.isCurrent) {
+      Navigator.of(context).pop();
+    } else {
+      // upar koi aur screen (CallScreen) ho to usay mat chhedo, sirf apna route hatao
+      Navigator.of(context).removeRoute(route);
+    }
   }
 
   Future<void> _accept() async {
@@ -103,7 +110,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [AppColors.brown900, AppColors.brown700],
+              colors: [AppColors.brown900, AppColors.brown700, AppColors.gold700],
+              stops: [0.0, 0.55, 1.0],
             ),
           ),
           child: SafeArea(

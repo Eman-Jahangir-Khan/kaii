@@ -205,6 +205,71 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     if (ok == true) authRepo.logout();
   }
+  bool _deleting = false;
+
+  Future<void> _confirmDelete() async {
+    if (_deleting) return;
+    final isGoogle =
+        _user?.providerData.any((p) => p.providerId == 'google.com') ?? false;
+    final c = TextEditingController();
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cream,
+        title: const Text(
+          'Delete account?',
+          style: TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              isGoogle
+                  ? 'This is permanent. You will be asked to confirm with Google.'
+                  : 'This is permanent. Enter your password to confirm.',
+              style: const TextStyle(color: AppColors.brown700),
+            ),
+            if (!isGoogle)
+              TextField(
+                controller: c,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: 'Password'),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.brown700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete',
+                style: TextStyle(
+                    color: Colors.red, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _deleting = true);
+    try {
+      await authRepo.deleteAccount(password: isGoogle ? null : c.text.trim());
+      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
+    } catch (e) {
+      debugPrint('DELETE ACCOUNT ERROR: $e');
+      _snack(authErrorMessage(e));
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -427,6 +492,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           fontWeight: FontWeight.w700,
                         ),
                       ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton.icon(
+                      onPressed: _deleting ? null : _confirmDelete,
+                      icon: _deleting
+                          ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.red),
+                      )
+                          : const Icon(Icons.delete_forever, color: Colors.red),
+                      label: const Text('Delete account',
+                          style: TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.w700)),
                     ),
                   ],
                 );

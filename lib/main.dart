@@ -7,6 +7,7 @@ import 'screens/auth_gate.dart';
 import 'theme.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'notification_service.dart';
+import 'call_push_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,6 +24,7 @@ class KaiiApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'kaii',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,

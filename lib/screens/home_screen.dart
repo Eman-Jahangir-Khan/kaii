@@ -18,6 +18,7 @@ import '../photo_viewer.dart';
 import 'contact_screen.dart';
 import '../call_repository.dart';
 import 'incoming_call_screen.dart';
+import '../call_push_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -52,18 +53,21 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     chatRepo.startContactNames();
     presenceService.start();
+    CallPushService.instance.init();
     _callSub = callRepo.incomingCalls().listen((snap) {
-      debugPrint('CALL: ringing docs = ${snap.docs.length}');
+      // App background mein ho to poori screen wali ring (callkit) dikhegi,
+      // yahan dobara screen na kholo
+      if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+        return;
+      }
       for (final d in snap.docs) {
         final m = d.data();
         final t = (m['createdAt'] as Timestamp?)?.toDate();
-        debugPrint('CALL: ${d.id} createdAt=$t now=${DateTime.now()}');
         if (t == null) continue;
-        // TEST ke liye ye time wali line abhi hata do:
-        // if (DateTime.now().difference(t).inSeconds > 60) continue;
+        if (DateTime.now().difference(t).inSeconds > 60) continue; // purani call
         if (callRepo.activeCallId == d.id) continue;
         if (callRepo.activeCallId != null) {
-          callRepo.decline(d.id).catchError((_) {});
+          callRepo.decline(d.id).catchError((_) {}); // pehle se call mein hain
           continue;
         }
         callRepo.activeCallId = d.id;
@@ -74,7 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         break;
       }
-    }, onError: (e) => debugPrint('CALL LISTEN ERROR: $e'));
+    });
     _sub = chatRepo.chatsStream().listen(
       _onSnapshot,
       onError: (_) {

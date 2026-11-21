@@ -48,6 +48,7 @@ dependencies:
   video_player: ^2.14.1
   agora_rtc_engine: ^6.6.4
   permission_handler: ^13.0.2
+  flutter_callkit_incoming: ^3.1.6
 
 dev_dependencies:
   flutter_test:

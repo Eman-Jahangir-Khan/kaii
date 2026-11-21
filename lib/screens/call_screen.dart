@@ -466,7 +466,8 @@ class _CallScreenState extends State<CallScreen> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [AppColors.brown900, AppColors.brown700],
+          colors: [AppColors.brown900, AppColors.brown700, AppColors.gold700],
+          stops: [0.0, 0.55, 1.0],
         ),
       ),
       child: SafeArea(

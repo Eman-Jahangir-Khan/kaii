@@ -4,11 +4,15 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import 'call_push_service.dart';
+
 // Background/terminated mein FCM khud notification dikha deta hai,
 // bas ye top-level handler zaroori hai.
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
+  // Call ka push aaya to poori screen wali ring dikhao
+  await handleCallPush(message.data);
 }
 
 class NotificationService {

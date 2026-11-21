@@ -9,6 +9,11 @@ class UsernameTakenException implements Exception {
   String toString() => 'This username is already taken.';
 }
 
+class AccountDeletedException implements Exception {
+  @override
+  String toString() => 'This account has been deleted.';
+}
+
 /// Poori app mein yehi ek instance use hoga
 final authRepo = AuthRepository();
 
@@ -85,9 +90,10 @@ class AuthRepository {
       final idToken = account.authentication.idToken;
       if (idToken == null) throw Exception('No Google ID token');
 
-      await _auth.signInWithCredential(
+      final cred = await _auth.signInWithCredential(
         GoogleAuthProvider.credential(idToken: idToken),
       );
+      await _blockIfDeleted(cred.user!);
       return true;
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) return false;
@@ -130,10 +136,11 @@ class AuthRepository {
     required String email,
     required String password,
   }) async {
-    await _auth.signInWithEmailAndPassword(
+    final cred = await _auth.signInWithEmailAndPassword(
       email: email.trim(),
       password: password,
     );
+    await _blockIfDeleted(cred.user!);
   }
 
   Future<void> resendVerificationEmail() async {
@@ -157,11 +164,91 @@ class AuthRepository {
     await NotificationService.instance.removeToken();
     await _auth.signOut();
   }
+  /// password = email users ke liye, Google users ke liye null
+  Future<void> deleteAccount({String? password}) async {
+    final user = _auth.currentUser!;
+    final uid = user.uid;
+
+    // 1) Re-authenticate
+    final isGoogle =
+    user.providerData.any((p) => p.providerId == 'google.com');
+    if (isGoogle) {
+      if (!_googleReady) {
+        await GoogleSignIn.instance.initialize();
+        _googleReady = true;
+      }
+      final account = await GoogleSignIn.instance.authenticate();
+      final idToken = account.authentication.idToken;
+      if (idToken == null) throw Exception('No Google ID token');
+      await user.reauthenticateWithCredential(
+        GoogleAuthProvider.credential(idToken: idToken),
+      );
+    } else {
+      await user.reauthenticateWithCredential(
+        EmailAuthProvider.credential(
+          email: user.email!,
+          password: password ?? '',
+        ),
+      );
+    }
+
+    // 2) Safety flag + presence/token band (auth abhi baqi hai)
+    final userRef = _db.collection('users').doc(uid);
+    final username = (await userRef.get()).data()?['username'] as String?;
+    await userRef.update({'isDeleted': true});
+    await presenceService.stop(); // warna delete ke baad doc dobara ban sakta hai
+    try {
+      await NotificationService.instance.removeToken();
+    } catch (_) {}
+
+    // 3) Firestore cleanup
+    final batch = _db.batch();
+    if (username != null && username.isNotEmpty) {
+      batch.delete(_db.collection('usernames').doc(username)); // username free
+    }
+    final statuses = await _db
+        .collection('statuses')
+        .where('ownerId', isEqualTo: uid)
+        .get();
+    for (final d in statuses.docs) {
+      batch.delete(d.reference);
+    }
+    batch.delete(userRef);
+    await batch.commit();
+
+    // 4) Auth user delete (sab se last)
+    try {
+      await user.delete();
+    } catch (e) {
+      await userRef.set({'isDeleted': true}); // login block rahe
+      try {
+        await GoogleSignIn.instance.signOut();
+      } catch (_) {}
+      await _auth.signOut();
+      rethrow;
+    }
+    try {
+      await GoogleSignIn.instance.signOut();
+    } catch (_) {}
+  }
+
+  /// Delete-fail hone wale account ko dubara login se roko
+  Future<void> _blockIfDeleted(User user) async {
+    final snap = await _db.collection('users').doc(user.uid).get();
+    if (snap.data()?['isDeleted'] == true) {
+      try {
+        await GoogleSignIn.instance.signOut();
+      } catch (_) {}
+      await _auth.signOut();
+      throw AccountDeletedException();
+    }
+  }
 }
 
 /// Errors ko user-friendly message mein badalta hai
 String authErrorMessage(Object e) {
   if (e is UsernameTakenException) return e.toString();
+  if (e is AccountDeletedException) return e.toString();
   if (e is GoogleSignInException) {
     return 'Google sign-in failed (${e.code.name}): ${e.description}';
   }
