@@ -11,6 +11,8 @@ import 'widgets.dart';
 
 String _two(int n) => n.toString().padLeft(2, '0');
 
+String _fmtDuration(int s) => '${s ~/ 60}:${_two(s % 60)}';
+
 String hhmm(DateTime? t) {
   if (t == null) return '';
   final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
@@ -69,6 +71,7 @@ class MessageBubble extends StatelessWidget {
   final String replyName;
   final VoidCallback? onReplyTap;
   final void Function(String url)? onImageTap;
+  final void Function(String url)? onVideoTap;
 
   const MessageBubble({
     super.key,
@@ -81,12 +84,14 @@ class MessageBubble extends StatelessWidget {
     this.replyName = '',
     this.onReplyTap,
     this.onImageTap,
+    this.onVideoTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final deleted = data['deletedForAll'] == true;
     final isImage = data['type'] == 'image' && data['imageUrl'] is String;
+    final isVideo = data['type'] == 'video' && data['videoUrl'] is String;
     final text = (data['text'] as String?) ?? '';
     final fg = mine ? AppColors.cream : AppColors.brown900;
     final meta =
@@ -250,6 +255,61 @@ class MessageBubble extends StatelessWidget {
                             ),
                             errorWidget: (_, __, ___) =>
                             const Icon(Icons.broken_image_outlined),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (isVideo)
+                    GestureDetector(
+                      onTap: () => onVideoTap?.call(data['videoUrl'] as String),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: AspectRatio(
+                          aspectRatio: (data['width'] is num &&
+                              data['height'] is num &&
+                              (data['height'] as num) > 0)
+                              ? ((data['width'] as num) /
+                              (data['height'] as num))
+                              .clamp(0.75, 1.8)
+                              .toDouble()
+                              : 16 / 9,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              CachedNetworkImage(
+                                imageUrl: (data['thumbUrl'] as String?) ?? '',
+                                fit: BoxFit.cover,
+                                errorWidget: (_, __, ___) =>
+                                const ColoredBox(color: Colors.black26),
+                              ),
+                              const Center(
+                                child: CircleAvatar(
+                                  radius: 24,
+                                  backgroundColor: Colors.black54,
+                                  child: Icon(Icons.play_arrow,
+                                      color: Colors.white, size: 32),
+                                ),
+                              ),
+                              if (data['duration'] is num)
+                                Positioned(
+                                  left: 8,
+                                  bottom: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black54,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      _fmtDuration(
+                                          (data['duration'] as num).round()),
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 11),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
                       ),

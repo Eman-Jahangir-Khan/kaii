@@ -7,6 +7,10 @@ final statusRepo = StatusRepository();
 /// Status kitni der rehta hai
 const statusLifetime = Duration(hours: 24);
 
+/// Video ke sirf pehle [seconds] seconds chalen (Cloudinary delivery transformation)
+String trimVideoUrl(String url, int seconds) =>
+    url.replaceFirst('/upload/', '/upload/so_0,eo_$seconds/');
+
 
 /// Status ki default visibility
 class StatusPrivacy {
@@ -25,6 +29,8 @@ class StatusItem {
   final int? width;
   final int? height;
   final DateTime? createdAt; // server timestamp aane tak null ho sakta hai
+  final int? bgColor; // sirf text status ke liye
+  final int fontIdx; // text status ka font
   final DateTime expiresAt;
   final List<String> visibleTo;
   final List<String> likes;
@@ -43,10 +49,12 @@ class StatusItem {
     this.width,
     this.height,
     this.createdAt,
-
+    this.bgColor,
+    this.fontIdx = 0,
   });
 
   bool get isVideo => mediaType == 'video';
+  bool get isText => mediaType == 'text';
   bool get isExpired => !expiresAt.isAfter(DateTime.now());
   bool likedBy(String uid) => likes.contains(uid);
   bool viewedByMe(String uid) => viewedBy.contains(uid);
@@ -61,6 +69,8 @@ class StatusItem {
       caption: m['caption'] as String? ?? '',
       width: m['width'] as int?,
       height: m['height'] as int?,
+      bgColor: (m['bgColor'] as num?)?.toInt(),
+      fontIdx: (m['fontIdx'] as num?)?.toInt() ?? 0,
       createdAt: (m['createdAt'] as Timestamp?)?.toDate(),
       expiresAt: (m['expiresAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       visibleTo: List<String>.from(m['visibleTo'] as List? ?? const []),
@@ -122,12 +132,14 @@ class StatusRepository {
 
   /// Naya status lagao. visibleTo = wo uids jo isay dekh sakte hain.
   Future<void> post({
-    required String mediaUrl,
-    required String mediaType, // 'image' ya 'video'
+    String mediaUrl = '',
+    required String mediaType, // 'image' | 'video' | 'text'
     required List<String> visibleTo,
     String caption = '',
     int? width,
     int? height,
+    int? bgColor,
+    int? fontIdx,
   }) {
     return _col.add({
       'ownerId': _uid,
@@ -136,6 +148,8 @@ class StatusRepository {
       'caption': caption.trim(),
       if (width != null) 'width': width,
       if (height != null) 'height': height,
+      if (bgColor != null) 'bgColor': bgColor,
+      if (fontIdx != null) 'fontIdx': fontIdx,
       'visibleTo': visibleTo.where((u) => u != _uid).toList(),
       'likes': <String>[],
       'viewedBy': <String>[],

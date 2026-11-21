@@ -17,6 +17,8 @@ import '../widgets.dart';
 import 'group_info_screen.dart';
 import 'group_message_info_screen.dart';
 import 'forward_to_screen.dart';
+import 'video_player_screen.dart';
+import '../media_pick.dart';
 
 class _ChatBg {
   final String key;
@@ -505,14 +507,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _scrollToBottom();
   }
 
-  Future<void> _pickAndSendImage(ImageSource source) async {
+  Future<void> _sendImage(XFile picked) async {
     if (_uploading || !_isMember) return;
-    final XFile? picked = await _picker.pickImage(
-      source: source,
-      imageQuality: 70,
-      maxWidth: 1280,
-    );
-    if (picked == null) return;
 
     final reply = _replyTo;
     setState(() {
@@ -542,32 +538,58 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     }
   }
 
-  void _showAttachSheet() {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Gallery'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendImage(ImageSource.gallery);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Camera'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendImage(ImageSource.camera);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+  Future<void> _showAttachSheet() async {
+    if (_uploading || !_isMember) return;
+    final media = await pickChatMedia(context);
+    if (media == null) return;
+    if (media.isVideo) {
+      await _sendVideo(media.file);
+    } else {
+      await _sendImage(media.file);
+    }
+  }
+
+  Future<void> _sendVideo(XFile picked) async {
+    if (_uploading || !_isMember) return;
+
+    final file = File(picked.path);
+    if (await file.length() > 50 * 1024 * 1024) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video is too large (max 50 MB)')),
+      );
+      return;
+    }
+
+    final reply = _replyTo;
+    setState(() {
+      _uploading = true;
+      _replyTo = null;
+    });
+
+    try {
+      final r = await cloudinary.uploadVideo(file);
+      final url = r['url'] as String;
+      await groupRepo.sendVideo(
+        groupId: widget.groupId,
+        members: _members,
+        videoUrl: url,
+        thumbUrl: url.replaceFirst(RegExp(r'\.[A-Za-z0-9]+$'), '.jpg'),
+        width: (r['width'] as num?)?.toInt(),
+        height: (r['height'] as num?)?.toInt(),
+        duration: (r['duration'] as num?)?.round(),
+        replyTo: reply,
+      );
+      _scrollToBottom();
+    } catch (e) {
+      debugPrint('GROUP VIDEO SEND ERROR: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video could not be sent')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
   }
 
   void _openImage(String url) {
@@ -585,12 +607,68 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     ));
   }
 
+  Future<void> _pickAndSendVideo(ImageSource source) async {
+    if (_uploading || !_isMember) return;
+    final XFile? picked = await _picker.pickVideo(
+      source: source,
+      maxDuration: const Duration(minutes: 1),
+    );
+    if (picked == null) return;
+
+    final file = File(picked.path);
+    if (await file.length() > 50 * 1024 * 1024) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video is too large (max 50 MB)')),
+      );
+      return;
+    }
+
+    final reply = _replyTo;
+    setState(() {
+      _uploading = true;
+      _replyTo = null;
+    });
+
+    try {
+      final r = await cloudinary.uploadVideo(file);
+      final url = r['url'] as String;
+      await groupRepo.sendVideo(
+        groupId: widget.groupId,
+        members: _members,
+        videoUrl: url,
+        thumbUrl: url.replaceFirst(RegExp(r'\.[A-Za-z0-9]+$'), '.jpg'),
+        width: (r['width'] as num?)?.toInt(),
+        height: (r['height'] as num?)?.toInt(),
+        duration: (r['duration'] as num?)?.round(),
+        replyTo: reply,
+      );
+      _scrollToBottom();
+    } catch (e) {
+      debugPrint('GROUP VIDEO SEND ERROR: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video could not be sent')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _openVideo(String url) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => VideoPlayerScreen(url: url)),
+    );
+  }
+
   void _startReply(QueryDocumentSnapshot<Map<String, dynamic>> d) {
     if (_editingId != null || !_isMember) return;
     final m = d.data();
     if (m['deletedForAll'] == true || m['type'] == 'system') return;
     final text = m['type'] == 'image'
         ? '📷 Photo'
+        : m['type'] == 'video'
+        ? '🎥 Video'
         : ((m['text'] as String?) ?? '');
     setState(() {
       _replyTo = {
@@ -717,6 +795,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     if (m == null) return '';
     if (m['deletedForAll'] == true) return 'This message was deleted';
     if (m['type'] == 'image') return '📷 Photo';
+    if (m['type'] == 'video') return '🎥 Video';
     return (m['text'] as String?) ?? '';
   }
 
@@ -1378,8 +1457,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     final pins = _pinned;
     final i = _pinIndex.clamp(0, pins.length - 1);
     final m = pins[i].data();
-    final body =
-    m['type'] == 'image' ? '📷 Photo' : ((m['text'] as String?) ?? '');
+    final body = m['type'] == 'image'
+        ? '📷 Photo'
+        : m['type'] == 'video'
+        ? '🎥 Video'
+        : ((m['text'] as String?) ?? '');
     final pinSid = (m['senderId'] as String?) ?? '';
     final storedName = (m['senderName'] as String?) ?? '';
     final sender = pinSid.isEmpty || pinSid == _myUid
@@ -1624,6 +1706,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                           time: created,
                           showSender: showSender,
                           onImageTap: _openImage,
+                          onVideoTap: _openVideo,
                           replyName: reply is Map
                               ? (reply['senderId'] == _myUid
                               ? 'You'

@@ -194,6 +194,33 @@ class GroupRepository {
     );
   }
 
+  Future<void> sendVideo({
+    required String groupId,
+    required List<String> members,
+    required String videoUrl,
+    required String thumbUrl,
+    int? width,
+    int? height,
+    int? duration,
+    Map<String, dynamic>? replyTo,
+  }) {
+    return _send(
+      groupId: groupId,
+      members: members,
+      preview: '🎥 Video',
+      message: {
+        'type': 'video',
+        'videoUrl': videoUrl,
+        'thumbUrl': thumbUrl,
+        if (width != null) 'width': width,
+        if (height != null) 'height': height,
+        if (duration != null) 'duration': duration,
+        'text': '',
+        if (replyTo != null) 'replyTo': replyTo,
+      },
+    );
+  }
+
   Future<void> _send({
     required String groupId,
     required List<String> members,

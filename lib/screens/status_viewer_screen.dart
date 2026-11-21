@@ -12,6 +12,7 @@ import '../chat_repository.dart';
 import '../status_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import 'status_fonts.dart';
 
 const _imageSeconds = 5;
 
@@ -180,9 +181,11 @@ class _StatusViewerScreenState extends State<StatusViewerScreen>
     }
 
     if (!item.isVideo) {
-      try {
-        await precacheImage(CachedNetworkImageProvider(item.mediaUrl), context);
-      } catch (_) {}
+      if (!item.isText) {
+        try {
+          await precacheImage(CachedNetworkImageProvider(item.mediaUrl), context);
+        } catch (_) {}
+      }
       if (!mounted || token != _token) return;
       _anim.duration = const Duration(seconds: _imageSeconds);
       setState(() => _ready = true);
@@ -296,6 +299,7 @@ void _openSeenBy(StatusItem item) =>
 
 /// Chat mein quote ke liye chhota thumbnail (Cloudinary transformation)
 String _thumbOf(StatusItem i) {
+  if (i.isText) return '';
   var url = i.mediaUrl.replaceFirst('/upload/', '/upload/w_160,h_160,c_fill/');
   if (i.isVideo) url = url.replaceFirst(RegExp(r'\.[A-Za-z0-9]+$'), '.jpg');
   return url;
@@ -422,6 +426,20 @@ Widget _mediaStage(StatusItem item) {
 }
 
 Widget _content(StatusItem item) {
+  if (item.isText) {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      color: Color(item.bgColor ?? 0xFF6D4C41),
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Text(
+        item.caption,
+        textAlign: TextAlign.center,
+        style: statusFontStyle(item.fontIdx, size: 28),
+      ),
+    );
+  }
   if (item.isVideo) {
     final v = _video;
     if (v == null) return const SizedBox.shrink();
@@ -685,7 +703,7 @@ Widget build(BuildContext context) {
                 _progress(),
                 _header(item),
                 const Spacer(),
-                if (item.caption.isNotEmpty)
+                if (item.caption.isNotEmpty && !item.isText)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: Text(

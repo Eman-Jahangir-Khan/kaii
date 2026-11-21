@@ -186,7 +186,6 @@ class ChatRepository {
         'text': '',
         'count': messageIds.length,
         'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': null,
         'readAt': null,
       });
     }
@@ -350,7 +349,6 @@ class ChatRepository {
     int? width,
     int? height,
     String caption = '',
-    Duration? destructAfter,
     Map<String, dynamic>? replyTo,
   }) async {
     final chatId = chatIdWith(otherUid);
@@ -382,9 +380,52 @@ class ChatRepository {
       'text': cap,
       if (replyTo != null) 'replyTo': replyTo,
       'createdAt': FieldValue.serverTimestamp(),
-      'expiresAt': destructAfter == null
-          ? null
-          : Timestamp.fromDate(DateTime.now().add(destructAfter)),
+      'readAt': null,
+    });
+
+    await batch.commit();
+  }
+
+  /// Video message bhejo (video Cloudinary pe upload ho chuki hai)
+  Future<void> sendVideo({
+    required String otherUid,
+    required String videoUrl,
+    required String thumbUrl,
+    int? width,
+    int? height,
+    int? duration,
+    Map<String, dynamic>? replyTo,
+  }) async {
+    final chatId = chatIdWith(otherUid);
+    final chatRef = _db.collection('chats').doc(chatId);
+    final msgRef = chatRef.collection('messages').doc();
+    final participants = [_uid, otherUid]..sort();
+
+    final batch = _db.batch();
+
+    batch.set(
+      chatRef,
+      {
+        'participants': participants,
+        'lastMessage': '🎥 Video',
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'lastSenderId': _uid,
+        'unread': {otherUid: FieldValue.increment(1)},
+      },
+      SetOptions(merge: true),
+    );
+
+    batch.set(msgRef, {
+      'senderId': _uid,
+      'type': 'video',
+      'videoUrl': videoUrl,
+      'thumbUrl': thumbUrl,
+      if (width != null) 'width': width,
+      if (height != null) 'height': height,
+      if (duration != null) 'duration': duration,
+      'text': '',
+      if (replyTo != null) 'replyTo': replyTo,
+      'createdAt': FieldValue.serverTimestamp(),
       'readAt': null,
     });
 
@@ -392,11 +433,9 @@ class ChatRepository {
   }
 
   /// Message bhejo. Pehla message chat bhi bana deta hai.
-  /// destructAfter dene par message utni der baad expire hota hai.
   Future<void> sendMessage({
     required String otherUid,
     required String text,
-    Duration? destructAfter,
     bool forwarded = false,
     Map<String, dynamic>? replyTo,
   }) async {
@@ -429,9 +468,6 @@ class ChatRepository {
       if (replyTo != null) 'replyTo': replyTo,
       if (forwarded) 'forwarded': true,
       'createdAt': FieldValue.serverTimestamp(),
-      'expiresAt': destructAfter == null
-          ? null
-          : Timestamp.fromDate(DateTime.now().add(destructAfter)),
       'readAt': null,
     });
 
@@ -482,18 +518,6 @@ class ChatRepository {
 
 
 
-  /// Expired message ko delete karo (UI jab dekhe to call kare)
-  Future<void> deleteMessage({
-    required String chatId,
-    required String messageId,
-  }) async {
-    await _db
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .doc(messageId)
-        .delete();
-  }
 
   final Map<String, Map<String, dynamic>> _userCache = {};
 

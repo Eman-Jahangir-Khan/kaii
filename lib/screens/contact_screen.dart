@@ -53,7 +53,6 @@ class _ContactScreenState extends State<ContactScreen> {
     try {
       final cut = await chatRepo.deletedAtFor(_chatId);
       final snap = await chatRepo.messagesStream(_chatId, limit: 300).first;
-      final now = DateTime.now();
       final urls = <String>[];
       for (final d in snap.docs) {
         final m = d.data();
@@ -63,8 +62,6 @@ class _ContactScreenState extends State<ContactScreen> {
         if (m['deletedForAll'] == true) continue;
         final delFor = m['deletedFor'];
         if (delFor is List && delFor.contains(_myUid)) continue;
-        final exp = m['expiresAt'];
-        if (exp is Timestamp && exp.toDate().isBefore(now)) continue;
         final at = m['createdAt'];
         if (cut != null && at is Timestamp && at.compareTo(cut) <= 0) continue;
         urls.add(url);

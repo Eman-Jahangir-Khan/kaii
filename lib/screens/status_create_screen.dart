@@ -9,6 +9,7 @@ import '../cloudinary_service.dart';
 import '../status_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import 'status_text_create_screen.dart';
 
 enum _Vis { contacts, only, except }
 
@@ -30,8 +31,13 @@ Widget _sheetTile(BuildContext ctx, IconData icon, String label, String value) {
 
 /// Status tab ke + button se call karo:
 /// pehle media chuno (photo / video), phir create screen khulti hai.
-Future<void> startNewStatus(BuildContext context) async {
-  final choice = await showModalBottomSheet<String>(
+bool _isVideoPath(String p) {
+  final e = p.split('.').last.toLowerCase();
+  return const ['mp4', 'mov', 'm4v', '3gp', 'mkv', 'webm', 'avi'].contains(e);
+}
+
+Future<String?> _pickSheet(BuildContext context, List<Widget> Function(BuildContext) tiles) {
+  return showModalBottomSheet<String>(
     context: context,
     backgroundColor: AppColors.cream,
     shape: const RoundedRectangleBorder(
@@ -42,38 +48,60 @@ Future<void> startNewStatus(BuildContext context) async {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 8),
-          _sheetTile(ctx, Icons.photo_library_outlined, 'Photo from gallery',
-              'photo_gallery'),
-          _sheetTile(
-              ctx, Icons.photo_camera_outlined, 'Take a photo', 'photo_camera'),
-          _sheetTile(ctx, Icons.video_library_outlined, 'Video from gallery',
-              'video_gallery'),
-          _sheetTile(
-              ctx, Icons.videocam_outlined, 'Record a video', 'video_camera'),
+          ...tiles(ctx),
           const SizedBox(height: 8),
         ],
       ),
     ),
   );
+}
+
+/// Status tab ke + button se call karo:
+/// Text / Gallery (photo+video) / Camera (photo ya video)
+Future<void> startNewStatus(BuildContext context) async {
+  final choice = await _pickSheet(context, (ctx) => [
+    _sheetTile(ctx, Icons.text_fields_rounded, 'Text', 'text'),
+    _sheetTile(ctx, Icons.photo_library_outlined, 'Gallery', 'gallery'),
+    _sheetTile(ctx, Icons.photo_camera_outlined, 'Camera', 'camera'),
+  ]);
   if (choice == null || !context.mounted) return;
 
-  final isVideo = choice.startsWith('video');
-  final source =
-  choice.endsWith('camera') ? ImageSource.camera : ImageSource.gallery;
+  if (choice == 'text') {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const CreateTextStatusScreen()),
+    );
+    return;
+  }
 
   XFile? picked;
+  var isVideo = false;
   try {
     final picker = ImagePicker();
-    picked = isVideo
-        ? await picker.pickVideo(
-      source: source,
-      maxDuration: const Duration(seconds: _maxVideoSeconds),
-    )
-        : await picker.pickImage(
-      source: source,
-      imageQuality: 85,
-      maxWidth: 1600,
-    );
+    if (choice == 'gallery') {
+      // photo aur video dono ek hi picker mein; video ki lambai ki koi limit nahi
+      picked = await picker.pickMedia(
+        imageQuality: 85,
+        maxWidth: 1600,
+      );
+      if (picked != null) isVideo = _isVideoPath(picked.path);
+    } else {
+      final kind = await _pickSheet(context, (ctx) => [
+        _sheetTile(ctx, Icons.photo_camera_outlined, 'Take a photo', 'photo'),
+        _sheetTile(ctx, Icons.videocam_outlined, 'Record a video', 'video'),
+      ]);
+      if (kind == null || !context.mounted) return;
+      isVideo = kind == 'video';
+      picked = isVideo
+          ? await picker.pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(seconds: _maxVideoSeconds),
+      )
+          : await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 85,
+        maxWidth: 1600,
+      );
+    }
   } catch (e) {
     debugPrint('startNewStatus pick error: $e');
     if (context.mounted) {
@@ -109,7 +137,7 @@ class CreateStatusScreen extends StatefulWidget {
 class _CreateStatusScreenState extends State<CreateStatusScreen> {
   final _caption = TextEditingController();
   VideoPlayerController? _video;
-  bool _tooLong = false;
+  bool _willTrim = false;
   bool _loading = false;
 
   _Vis _vis = _Vis.contacts;
@@ -138,11 +166,16 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
     try {
       await c.initialize();
       await c.setLooping(true);
+      // preview bhi sirf pehle 30 sec chale
+      c.addListener(() {
+        if (c.value.position >= const Duration(seconds: _maxVideoSeconds)) {
+          c.seekTo(Duration.zero);
+        }
+      });
       await c.play();
       if (!mounted) return;
       setState(() {
-        // gallery se chuni hui video maxDuration se lambi ho sakti hai
-        _tooLong = c.value.duration > const Duration(seconds: _maxVideoSeconds + 1);
+        _willTrim = c.value.duration > const Duration(seconds: _maxVideoSeconds);
       });
     } catch (e) {
       debugPrint('video init error: $e');
@@ -249,8 +282,13 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
           ? await cloudinary.uploadVideo(widget.file)
           : await cloudinary.uploadImage(widget.file);
 
+      final rawUrl = up['url'] as String;
+      final url = (widget.isVideo && _willTrim)
+          ? trimVideoUrl(rawUrl, _maxVideoSeconds)
+          : rawUrl;
+
       await statusRepo.post(
-        mediaUrl: up['url'] as String,
+        mediaUrl: url,
         mediaType: widget.isVideo ? 'video' : 'image',
         visibleTo: visibleTo,
         caption: _caption.text,
@@ -338,7 +376,7 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final canPost = !_loading && !_tooLong && _contactsReady;
+    final canPost = !_loading && _contactsReady;
 
     return Scaffold(
       backgroundColor: AppColors.cream,
@@ -350,13 +388,13 @@ class _CreateStatusScreenState extends State<CreateStatusScreen> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
               children: [
                 _preview(),
-                if (_tooLong)
+                if (_willTrim)
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
                     child: Text(
-                      'Video must be $_maxVideoSeconds seconds or shorter.',
+                      'This video is longer than $_maxVideoSeconds seconds. Only the first $_maxVideoSeconds seconds will be posted.',
                       style: TextStyle(
-                        color: Colors.red,
+                        color: AppColors.brown700,
                         fontWeight: FontWeight.w700,
                       ),
                     ),

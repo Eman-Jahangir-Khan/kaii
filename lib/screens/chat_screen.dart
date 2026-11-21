@@ -17,6 +17,8 @@ import 'forward_to_screen.dart';
 import '../status_repository.dart';
 import 'status_viewer_screen.dart';
 import 'call_screen.dart';
+import 'video_player_screen.dart';
+import '../media_pick.dart';
 
 class _ChatBg {
   final String key;
@@ -36,20 +38,6 @@ const _chatBgs = [
   _ChatBg('grey', 'Grey', Color(0xFFEDEDED)),
 ];
 
-/// Self-destruct ke options (duration null = off)
-class _DestructOption {
-  final String label;
-  final Duration? duration;
-  const _DestructOption(this.label, this.duration);
-}
-
-const _destructOptions = <_DestructOption>[
-  _DestructOption('Off', null),
-  _DestructOption('10 seconds', Duration(seconds: 10)),
-  _DestructOption('1 minute', Duration(minutes: 1)),
-  _DestructOption('1 hour', Duration(hours: 1)),
-  _DestructOption('24 hours', Duration(hours: 24)),
-];
 
 class ChatScreen extends StatefulWidget {
   final String otherUid;
@@ -82,12 +70,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _failed = false;
   bool _hasText = false;
   bool _marking = false;
-  _DestructOption _destruct = _destructOptions.first;
   final _picker = ImagePicker();
   bool _uploading = false;
 
-  /// Jin expired messages ka delete call ja chuka hai
-  final Set<String> _deleting = {};
 
   /// Jab maine ye chat delete ki thi (us se pehle ke messages nahi dikhane)
   Timestamp? _deletedAt;
@@ -351,7 +336,6 @@ class _ChatScreenState extends State<ChatScreen> {
       _firstUnreadId = firstUnread;
       _unreadCount = unreadCount;
     });
-    _sweepExpired();
     _markRead(docs);
 
     // Bohat saare unread hon to banner tak scroll karo (sirf ek baar)
@@ -428,25 +412,8 @@ class _ChatScreenState extends State<ChatScreen> {
     if (status != _shownStatus) {
       setState(() => _shownStatus = status);
     }
-
-    final hasExpiring = _docs.any((d) => d.data()['expiresAt'] != null);
-    if (!hasExpiring) return;
-    setState(() {}); // countdown refresh
-    _sweepExpired();
   }
 
-  /// Expire ho chuke messages Firestore se delete karo
-  void _sweepExpired() {
-    final now = DateTime.now();
-    for (final d in _docs) {
-      final exp = (d.data()['expiresAt'] as Timestamp?)?.toDate();
-      if (exp == null || exp.isAfter(now)) continue;
-      if (!_deleting.add(d.id)) continue;
-      chatRepo
-          .deleteMessage(chatId: _chatId, messageId: d.id)
-          .catchError((_) {});
-    }
-  }
 
   void _send() {
     if (_editingId != null) {
@@ -464,7 +431,6 @@ class _ChatScreenState extends State<ChatScreen> {
         .sendMessage(
       otherUid: widget.otherUid,
       text: text,
-      destructAfter: _destruct.duration,
       replyTo: reply,
     )
         .catchError((_) {
@@ -484,14 +450,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _pickAndSendImage(ImageSource source) async {
+  Future<void> _sendImage(XFile picked) async {
     if (_uploading) return;
-    final XFile? picked = await _picker.pickImage(
-      source: source,
-      imageQuality: 70, // compress, free quota bachane ke liye
-      maxWidth: 1280,
-    );
-    if (picked == null) return;
 
     final reply = _replyTo;
     setState(() {
@@ -506,7 +466,6 @@ class _ChatScreenState extends State<ChatScreen> {
         imageUrl: r['url'] as String,
         width: (r['width'] as num?)?.toInt(),
         height: (r['height'] as num?)?.toInt(),
-        destructAfter: _destruct.duration,
         replyTo: reply,
       );
       if (_scroll.hasClients) {
@@ -522,32 +481,67 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _showAttachSheet() {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Gallery'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendImage(ImageSource.gallery);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Camera'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _pickAndSendImage(ImageSource.camera);
-              },
-            ),
-          ],
-        ),
-      ),
+  Future<void> _sendVideo(XFile picked) async {
+    if (_uploading) return;
+
+    final file = File(picked.path);
+    if (await file.length() > 50 * 1024 * 1024) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video is too large (max 50 MB)')),
+      );
+      return;
+    }
+
+    final reply = _replyTo;
+    setState(() {
+      _uploading = true;
+      _replyTo = null;
+    });
+
+    try {
+      final r = await cloudinary.uploadVideo(file);
+      final url = r['url'] as String;
+      await chatRepo.sendVideo(
+        otherUid: widget.otherUid,
+        videoUrl: url,
+        thumbUrl: url.replaceFirst(RegExp(r'\.[A-Za-z0-9]+$'), '.jpg'),
+        width: (r['width'] as num?)?.toInt(),
+        height: (r['height'] as num?)?.toInt(),
+        duration: (r['duration'] as num?)?.round(),
+        replyTo: reply,
+      );
+      if (_scroll.hasClients) {
+        _scroll.animateTo(0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut);
+      }
+    } catch (e) {
+      debugPrint('VIDEO SEND ERROR: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video could not be sent')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _openVideo(String url) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => VideoPlayerScreen(url: url)),
     );
+  }
+
+  Future<void> _showAttachSheet() async {
+    if (_uploading) return;
+    final media = await pickChatMedia(context);
+    if (media == null) return;
+    if (media.isVideo) {
+      await _sendVideo(media.file);
+    } else {
+      await _sendImage(media.file);
+    }
   }
 
   void _openImage(String url) {
@@ -567,59 +561,7 @@ class _ChatScreenState extends State<ChatScreen> {
     ));
   }
 
-  Future<void> _pickDestruct() async {
-    final picked = await showModalBottomSheet<_DestructOption>(
-      context: context,
-      backgroundColor: AppColors.cream,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 16, 8, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
-                child: Text(
-                  'Disappearing messages',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.brown900,
-                  ),
-                ),
-              ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text(
-                  'New messages will be deleted after this time.',
-                  style: TextStyle(color: AppColors.brown700, fontSize: 13),
-                ),
-              ),
-              for (final o in _destructOptions)
-                ListTile(
-                  title: Text(
-                    o.label,
-                    style: const TextStyle(
-                      color: AppColors.brown900,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  trailing: o.label == _destruct.label
-                      ? const Icon(Icons.check, color: AppColors.gold700)
-                      : null,
-                  onTap: () => Navigator.of(ctx).pop(o),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (picked != null && mounted) setState(() => _destruct = picked);
-  }
+
 
   // -------------------------------------------------------------------------
   // UI
@@ -865,6 +807,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final d = docs.first;
     if (!_isMine(d) ||
         d.data()['type'] == 'image' ||
+        d.data()['type'] == 'video' ||
         d.data()['deletedForAll'] == true ||
         !_within(d, const Duration(minutes: 15))) {
       _clearMsgSelection();
@@ -899,7 +842,11 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_editingId != null) return;
     final m = d.data();
     if (m['deletedForAll'] == true || m['type'] == 'system') return;
-    final text = (m['text'] as String?) ?? '';
+    final text = m['type'] == 'image'
+        ? '📷 Photo'
+        : m['type'] == 'video'
+        ? '🎥 Video'
+        : ((m['text'] as String?) ?? '');
     setState(() {
       _replyTo = {
         'id': d.id,
@@ -1363,12 +1310,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Jin messages mein search wala lafz hai un ki ids (naya pehle)
   List<String> _matchIds() {
     if (_searchQuery.isEmpty) return const [];
-    final now = DateTime.now();
     return _docs.where((d) {
-      final m = d.data();
-      final exp = (m['expiresAt'] as Timestamp?)?.toDate();
-      if (exp != null && !exp.isAfter(now)) return false;
-      return ((m['text'] as String?) ?? '')
+      return ((d.data()['text'] as String?) ?? '')
           .toLowerCase()
           .contains(_searchQuery);
     }).map((d) => d.id).toList();
@@ -1750,12 +1693,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
-    // Expired messages screen se foran chhupa do
-    final now = DateTime.now();
-    var msgs = _docs.where((d)  {
-      final exp = (d.data()['expiresAt'] as Timestamp?)?.toDate();
-      return exp == null || exp.isAfter(now);
-    }).toList();
+    final msgs = _docs;
 
 
 
@@ -1825,12 +1763,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           onReply: () => _startReply(doc),
                           child: _Bubble(
                             onImageTap: _openImage,
+                            onVideoTap: _openVideo,
                             data: m,
                             mine: m['senderId'] == _myUid,
                             pending: doc.metadata.hasPendingWrites || created == null,
                             time: created,
-                            expiresAt: (m['expiresAt'] as Timestamp?)?.toDate(),
-                            now: now,
                             highlight: _searchQuery,
                             current: doc.id == currentId,
                             replyName: (m['replyTo'] is Map &&
@@ -1936,7 +1873,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _inputBar() {
-    final active = _destruct.duration != null;
     return Container(
       color: AppColors.cream,
       child: SafeArea(
@@ -2032,51 +1968,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     ],
                   ),
                 ),
-              if (active)
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.gold500.withValues(alpha: 0.18),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.timer_outlined,
-                          size: 16, color: AppColors.gold700),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Messages disappear after ${_destruct.label}',
-                          style: const TextStyle(
-                            color: AppColors.brown900,
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () =>
-                            setState(() => _destruct = _destructOptions.first),
-                        child: const Icon(Icons.close,
-                            size: 18, color: AppColors.brown700),
-                      ),
-                    ],
-                  ),
-                ),
+
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  IconButton(
-                    tooltip: 'Disappearing messages',
-                    onPressed: _pickDestruct,
-                    icon: Icon(
-                      active ? Icons.timer : Icons.timer_outlined,
-                      color: active ? AppColors.gold700 : AppColors.brown700,
-                    ),
-                  ),
                   IconButton(
                     tooltip: 'Attach',
                     onPressed: (_editingId != null || _uploading)
@@ -2177,26 +2072,24 @@ class _Bubble extends StatelessWidget {
   final bool mine;
   final bool pending;
   final DateTime? time;
-  final DateTime? expiresAt;
-  final DateTime now;
   final String highlight;
   final bool current;
   final String replyName;
   final VoidCallback? onReplyTap;
   final void Function(String url)? onImageTap;
+  final void Function(String url)? onVideoTap;   // onImageTap ke neeche
 
   const _Bubble({
     required this.data,
     required this.mine,
     required this.pending,
     required this.time,
-    required this.expiresAt,
-    required this.now,
     this.highlight = '',
     this.current = false,
     this.replyName = '',
     this.onReplyTap,
     this.onImageTap,
+    this.onVideoTap,
   });
 
 
@@ -2387,6 +2280,59 @@ class _Bubble extends StatelessWidget {
                         ),
                       ),
                     ),
+                  if (data['type'] == 'video' && data['videoUrl'] is String)
+                    GestureDetector(
+                      onTap: () => onVideoTap?.call(data['videoUrl'] as String),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: AspectRatio(
+                          aspectRatio: (data['width'] is num &&
+                              data['height'] is num &&
+                              (data['height'] as num) > 0)
+                              ? ((data['width'] as num) / (data['height'] as num))
+                              .clamp(0.75, 1.8)
+                              .toDouble()
+                              : 16 / 9,
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              CachedNetworkImage(
+                                imageUrl: (data['thumbUrl'] as String?) ?? '',
+                                fit: BoxFit.cover,
+                                errorWidget: (_, __, ___) =>
+                                const ColoredBox(color: Colors.black26),
+                              ),
+                              const Center(
+                                child: CircleAvatar(
+                                  radius: 24,
+                                  backgroundColor: Colors.black54,
+                                  child: Icon(Icons.play_arrow,
+                                      color: Colors.white, size: 32),
+                                ),
+                              ),
+                              if (data['duration'] is num)
+                                Positioned(
+                                  left: 8,
+                                  bottom: 8,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black54,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      _fmtDuration((data['duration'] as num).round()),
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 11),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   if (text.isNotEmpty)
                     Padding(
                       padding: EdgeInsets.only(
@@ -2404,15 +2350,6 @@ class _Bubble extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (expiresAt != null) ...[
-                        Icon(Icons.timer_outlined, size: 12, color: meta),
-                        const SizedBox(width: 2),
-                        Text(
-                          _remaining(expiresAt!, now),
-                          style: TextStyle(fontSize: 11, color: meta),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
                       if (data['pinned'] == true &&
                           data['deletedForAll'] != true) ...[
                         Icon(Icons.push_pin, size: 12, color: meta),
@@ -2697,10 +2634,5 @@ String _dayLabel(DateTime t) {
   return '${_two(t.day)}/${_two(t.month)}/${t.year}';
 }
 
-String _remaining(DateTime exp, DateTime now) {
-  final s = exp.difference(now).inSeconds;
-  if (s < 60) return '${s < 0 ? 0 : s}s';
-  if (s < 3600) return '${(s / 60).ceil()}m';
-  if (s < 86400) return '${(s / 3600).ceil()}h';
-  return '${(s / 86400).ceil()}d';
-}
+String _fmtDuration(int s) => '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
+

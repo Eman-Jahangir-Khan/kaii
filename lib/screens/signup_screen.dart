@@ -159,7 +159,7 @@ class _SignupScreenState extends State<SignupScreen> {
                       controller: _username,
                       label: 'Username',
                       icon: Icons.alternate_email,
-                      helper: '3-20 characters: small letters, numbers, underscore, dot',
+                      helper: '6-20 characters: small letters, numbers, underscore, dot',
                       inputFormatters: [
                         FilteringTextInputFormatter.allow(
                             RegExp(r'[a-z0-9_.]')),
