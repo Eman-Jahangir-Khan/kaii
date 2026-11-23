@@ -10,6 +10,7 @@ import '../status_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'status_text_create_screen.dart';
+import '../media_pick.dart';
 
 enum _Vis { contacts, only, except }
 
@@ -29,12 +30,7 @@ Widget _sheetTile(BuildContext ctx, IconData icon, String label, String value) {
   );
 }
 
-/// Status tab ke + button se call karo:
-/// pehle media chuno (photo / video), phir create screen khulti hai.
-bool _isVideoPath(String p) {
-  final e = p.split('.').last.toLowerCase();
-  return const ['mp4', 'mov', 'm4v', '3gp', 'mkv', 'webm', 'avi'].contains(e);
-}
+
 
 Future<String?> _pickSheet(BuildContext context, List<Widget> Function(BuildContext) tiles) {
   return showModalBottomSheet<String>(
@@ -78,12 +74,14 @@ Future<void> startNewStatus(BuildContext context) async {
   try {
     final picker = ImagePicker();
     if (choice == 'gallery') {
-      // photo aur video dono ek hi picker mein; video ki lambai ki koi limit nahi
-      picked = await picker.pickMedia(
+      // in-app gallery: sirf photos aur videos
+      final m = await pickGalleryMedia(
+        context,
         imageQuality: 85,
-        maxWidth: 1600,
+        maxSize: 1600,
       );
-      if (picked != null) isVideo = _isVideoPath(picked.path);
+      picked = m?.file;
+      isVideo = m?.isVideo ?? false;
     } else {
       final kind = await _pickSheet(context, (ctx) => [
         _sheetTile(ctx, Icons.photo_camera_outlined, 'Take a photo', 'photo'),

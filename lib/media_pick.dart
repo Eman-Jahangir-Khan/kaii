@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
 import 'dart:io';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
@@ -50,7 +51,7 @@ Future<PickedMedia?> pickChatMedia(BuildContext context) async {
   ]);
   if (choice == null) return null;
 
-  if (choice == 'gallery') return _pickFromGallery(context);
+  if (choice == 'gallery') return pickGalleryMedia(context);
 
   // Camera: Android/iOS ka camera ek waqt mein photo ya video hi leta hai,
   // is liye yahan chhota sa doosra sawal
@@ -78,7 +79,11 @@ Future<PickedMedia?> pickChatMedia(BuildContext context) async {
 }
 
 /// In-app gallery: sirf photos aur videos dikhte hain (file manager nahi)
-Future<PickedMedia?> _pickFromGallery(BuildContext context) async {
+Future<PickedMedia?> pickGalleryMedia(
+    BuildContext context, {
+      int imageQuality = 70,
+      int maxSize = 1280,
+    }) async {
   final assets = await AssetPicker.pickAssets(
     context,
     pickerConfig: AssetPickerConfig(
@@ -98,8 +103,8 @@ Future<PickedMedia?> _pickFromGallery(BuildContext context) async {
 
   // photo: pehle jaisa compress (max 1280 px, quality 70)
   final bytes = await a.thumbnailDataWithSize(
-    ThumbnailSize(1280, 1280),
-    quality: 70,
+    ThumbnailSize(maxSize, maxSize),
+    quality: imageQuality,
   );
   if (bytes == null) return null;
   final tmp = File(

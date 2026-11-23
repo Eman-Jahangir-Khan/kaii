@@ -8,6 +8,7 @@ import 'theme.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'notification_service.dart';
 import 'call_push_service.dart';
+import 'screens/splash_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,7 +29,7 @@ class KaiiApp extends StatelessWidget {
       title: 'kaii',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      home: const AuthGate(),
+      home: const SplashScreen(next: AuthGate()),
     );
   }
 }

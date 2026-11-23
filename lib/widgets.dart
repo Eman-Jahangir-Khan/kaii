@@ -7,70 +7,80 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'theme.dart';
 
-/// k + do dots wala kaii logo
+/// Final logo: gold card + do "i" (code se bana hua, koi asset nahi)
 class KaiiLogo extends StatelessWidget {
   final double size;
-  const KaiiLogo({super.key, this.size = 80});
+  final bool showShadow;
+  const KaiiLogo({super.key, this.size = 80, this.showShadow = true});
 
   @override
   Widget build(BuildContext context) {
-    final dot = size * 0.09;
-    return Container(
+    return SizedBox(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        color: AppColors.cream,
-        borderRadius: BorderRadius.circular(size * 0.3),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Text(
-            'k',
-            style: TextStyle(
-              fontSize: size * 0.62,
-              fontWeight: FontWeight.w800,
-              color: AppColors.brown900,
-              height: 1,
-            ),
-          ),
-          Positioned(
-            top: size * 0.2,
-            right: size * 0.17,
-            child: Row(
-              children: [
-                _Dot(dot),
-                SizedBox(width: dot * 0.7),
-                _Dot(dot),
-              ],
-            ),
-          ),
-        ],
-      ),
+      child: CustomPaint(painter: _LogoPainter(showShadow: showShadow)),
     );
   }
 }
 
-class _Dot extends StatelessWidget {
-  final double size;
-  const _Dot(this.size);
+class _LogoPainter extends CustomPainter {
+  final bool showShadow;
+  const _LogoPainter({required this.showShadow});
+
+  // Design 1024x1024 canvas par bana hai, visible hissa 90..926 hai
+  static const double _origin = 90;
+  static const double _span = 836;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: size,
-    height: size,
-    decoration: const BoxDecoration(
-      color: AppColors.gold700,
-      shape: BoxShape.circle,
-    ),
-  );
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / _span);
+    canvas.translate(-_origin, -_origin);
+
+    const cardRadius = Radius.circular(110);
+
+    if (showShadow) {
+      canvas.drawRRect(
+        RRect.fromLTRBR(126, 126, 926, 926, cardRadius),
+        Paint()..color = const Color(0xFFA6A6A6),
+      );
+    }
+
+    const cardRect = Rect.fromLTRB(90, 90, 890, 890);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(cardRect, cardRadius),
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF9E7400), Color(0xFFF2B400)],
+        ).createShader(cardRect),
+    );
+
+    _drawI(canvas, centerX: 390, color: const Color(0xFFFFE75C));
+    _drawI(canvas, centerX: 590, color: const Color(0xFF5C4811));
+
+    canvas.restore();
+  }
+
+  void _drawI(Canvas canvas, {required double centerX, required Color color}) {
+    final paint = Paint()..color = color;
+    canvas.drawCircle(Offset(centerX, 315), 55, paint);
+    canvas.drawRRect(
+      RRect.fromLTRBR(
+        centerX - 50,
+        385,
+        centerX + 50,
+        725,
+        const Radius.circular(50),
+      ),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _LogoPainter old) =>
+      old.showShadow != showShadow;
 }
 
 /// Neeche se halka sa slide + fade hoke aata hai (delay ke sath)
@@ -558,7 +568,7 @@ class AuthShell extends StatelessWidget {
                             AnimatedOpacity(
                               opacity: keyboardOpen ? 0 : 1,
                               duration: const Duration(milliseconds: 200),
-                              child: const KaiiLogo(size: 40),
+                              child: const KaiiLogo(size: 48),
                             ),
                           ],
                         ),

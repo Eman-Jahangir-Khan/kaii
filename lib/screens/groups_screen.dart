@@ -406,19 +406,6 @@ class _GroupsScreenState extends State<GroupsScreen> {
                       ),
                       if (isMember)
                         IconButton(
-                          tooltip: 'Call',
-                          icon: const Icon(Icons.call_outlined,
-                              color: AppColors.gold700),
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text('Calls are coming soon')),
-                            );
-                          },
-                        ),
-                      if (isMember)
-                        IconButton(
                           tooltip: 'Group info',
                           icon: const Icon(Icons.info_outline,
                               color: AppColors.gold700),
