@@ -6,7 +6,42 @@ import 'presence_service.dart';
 
 class UsernameTakenException implements Exception {
   @override
-  String toString() => 'This username is already taken.';
+  String toString() => 'Username unavailable.';
+}
+
+/// Username 7 din mein sirf ek baar badal sakte hain
+class UsernameCooldownException implements Exception {
+  final DateTime allowedAt;
+  UsernameCooldownException(this.allowedAt);
+
+  @override
+  String toString() {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final d = allowedAt.toLocal();
+    return 'You can change your username again on '
+        '${d.day} ${months[d.month - 1]} ${d.year}.';
+  }
+}
+
+/// Username ke rules ek hi jagah (signup, Google signup, edit teeno yahi use karte hain)
+String? validateUsername(String? value) {
+  final name = value?.trim() ?? '';
+  if (name.isEmpty) return 'Username is required';
+  if (name.length < 6) return 'At least 6 characters';
+  if (name.length > 20) return 'At most 20 characters';
+  if (!RegExp(r'^[a-z0-9_.]+$').hasMatch(name)) {
+    return 'Only small letters, numbers, underscore and dot';
+  }
+  if (name.startsWith('.') || name.endsWith('.')) {
+    return 'Username cannot start or end with a dot';
+  }
+  if (name.contains('..')) {
+    return 'Username cannot have two dots in a row';
+  }
+  return null;
 }
 
 class AccountDeletedException implements Exception {
@@ -21,6 +56,9 @@ class AuthRepository {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  /// Username badalne ke beech kam az kam itna gap
+  static const Duration usernameCooldown = Duration(days: 7);
+
   /// reload() ke baad bhi fire hota hai, isliye authStateChanges ki jagah ye
   Stream<User?> get userChanges => _auth.userChanges();
   User? get currentUser => _auth.currentUser;
@@ -31,6 +69,45 @@ class AuthRepository {
         .doc(username.trim().toLowerCase())
         .get();
     return !doc.exists;
+  }
+
+  /// Username badlo: naya unique hona chahiye, aur pichli tabdeeli ko 7 din guzar chuke hon.
+  /// Sab kuch ek transaction mein: naya naam reserve, purana free, users doc update.
+  Future<void> changeUsername(String newUsername) async {
+    final user = _auth.currentUser!;
+    final next = newUsername.trim().toLowerCase();
+    final err = validateUsername(next);
+    if (err != null) throw Exception(err);
+
+    final userRef = _db.collection('users').doc(user.uid);
+
+    await _db.runTransaction((tx) async {
+      final userSnap = await tx.get(userRef);
+      final data = userSnap.data() ?? <String, dynamic>{};
+      final old = ((data['username'] as String?) ?? '').trim();
+      if (next == old) return;
+
+      final last = data['usernameChangedAt'];
+      if (last is Timestamp) {
+        final allowedAt = last.toDate().add(usernameCooldown);
+        if (DateTime.now().isBefore(allowedAt)) {
+          throw UsernameCooldownException(allowedAt);
+        }
+      }
+
+      final newRef = _db.collection('usernames').doc(next);
+      final newSnap = await tx.get(newRef);
+      if (newSnap.exists) throw UsernameTakenException();
+
+      tx.set(newRef, {'uid': user.uid});
+      if (old.isNotEmpty) {
+        tx.delete(_db.collection('usernames').doc(old));
+      }
+      tx.update(userRef, {
+        'username': next,
+        'usernameChangedAt': FieldValue.serverTimestamp(),
+      });
+    });
   }
 
   Future<void> signUp({
@@ -204,7 +281,17 @@ class AuthRepository {
     // 3) Firestore cleanup
     final batch = _db.batch();
     if (username != null && username.isNotEmpty) {
-      batch.delete(_db.collection('usernames').doc(username)); // username free
+      // usernames/{name} ke doc mein {'uid': ...} hai, uid se dhoondo
+      final unameDocs = await _db
+          .collection('usernames')
+          .where('uid', isEqualTo: uid)
+          .get();
+      for (final d in unameDocs.docs) {
+        batch.delete(d.reference);
+      }
+      if (username != null && username.isNotEmpty) {
+        batch.delete(_db.collection('usernames').doc(username)); // backup
+      }
     }
     final statuses = await _db
         .collection('statuses')
@@ -249,6 +336,10 @@ class AuthRepository {
 String authErrorMessage(Object e) {
   if (e is UsernameTakenException) return e.toString();
   if (e is AccountDeletedException) return e.toString();
+  if (e is UsernameCooldownException) return e.toString();
+  if (e is FirebaseException && e.code == 'permission-denied') {
+    return 'This change is not allowed right now.';
+  }
   if (e is GoogleSignInException) {
     return 'Google sign-in failed (${e.code.name}): ${e.description}';
   }

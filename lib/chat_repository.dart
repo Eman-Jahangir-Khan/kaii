@@ -533,6 +533,12 @@ class ChatRepository {
     return data;
   }
 
+  /// Cache mein pade user ke kuch fields foran badal do (agar cache mein hai)
+  void patchCachedUser(String uid, Map<String, dynamic> patch) {
+    final c = _userCache[uid];
+    if (c != null) _userCache[uid] = {...c, ...patch};
+  }
+
   /// Apna naam (nickname) badlo. Khali string = nickname hata do (username dikhega)
   Future<void> setMyName(String name) async {
     final value = name.trim();

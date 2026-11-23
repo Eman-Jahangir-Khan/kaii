@@ -79,6 +79,17 @@ class CallRepository {
   Future<void> markMissed(String id) =>
       _calls.doc(id).update({'status': 'missed'});
 
+  /// Call history se sirf MERE liye hatao (doosre ki history mein rehti hai)
+  Future<void> deleteForMe(List<String> ids) async {
+    final batch = _db.batch();
+    for (final id in ids) {
+      batch.update(_calls.doc(id), {
+        'deletedFor': FieldValue.arrayUnion([_uid]),
+      });
+    }
+    await batch.commit();
+  }
+
   Future<void> end(String id) => _calls.doc(id).update({
     'status': 'ended',
     'endedAt': FieldValue.serverTimestamp(),

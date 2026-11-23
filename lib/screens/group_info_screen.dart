@@ -172,30 +172,12 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
   // ------------------------------------------------------------------ edit
 
   Future<void> _rename() async {
-    final c = TextEditingController(text: (_group['name'] as String?) ?? '');
     final name = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Group name'),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          maxLength: 40,
-          textCapitalization: TextCapitalization.words,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, c.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
+      builder: (_) => _RenameGroupDialog(
+        initial: (_group['name'] as String?) ?? '',
       ),
     );
-    c.dispose();
     if (name == null || name.isEmpty || name == _group['name']) return;
     await _run(
           () => groupRepo.updateInfo(groupId: widget.groupId, name: name),
@@ -600,6 +582,11 @@ class _AddMembersScreenState extends State<_AddMembersScreen> {
         final uid = u['uid'] as String;
         final on = _selected.contains(uid);
         final username = (u['username'] as String?) ?? '';
+        // Mera save kiya naam > nickname > username (same jaise group info mein)
+        final title = chatRepo.displayName(uid, u);
+        final photo = ((u['photoUrl'] as String?) ?? '').isNotEmpty
+            ? (u['photoUrl'] as String)
+            : ((chatRepo.cachedUser(uid)?['photoUrl'] as String?) ?? '');
         return Container(
           decoration: BoxDecoration(
             color: softCardColor,
@@ -622,20 +609,32 @@ class _AddMembersScreenState extends State<_AddMembersScreen> {
                   children: [
                     UserAvatar(
                       username: username,
-                      photoUrl: (u['photoUrl'] as String?) ?? '',
+                      photoUrl: photo,
                       size: 44,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Text(
-                        username,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.brown900,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.brown900,
+                            ),
+                          ),
+                          if (username.isNotEmpty && username != title)
+                            Text(
+                              username,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: AppColors.brown700),
+                            ),
+                        ],
                       ),
                     ),
                     Icon(
@@ -682,6 +681,53 @@ class _AddMembersScreenState extends State<_AddMembersScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _RenameGroupDialog extends StatefulWidget {
+  final String initial;
+  const _RenameGroupDialog({required this.initial});
+
+  @override
+  State<_RenameGroupDialog> createState() => _RenameGroupDialogState();
+}
+
+class _RenameGroupDialogState extends State<_RenameGroupDialog> {
+  late final TextEditingController _c =
+  TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  void _close([String? value]) {
+    FocusScope.of(context).unfocus(); // pehle keyboard band
+    Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Group name'),
+      content: TextField(
+        controller: _c,
+        autofocus: true,
+        maxLength: 40,
+        textCapitalization: TextCapitalization.words,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => _close(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => _close(_c.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

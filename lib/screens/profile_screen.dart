@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -11,6 +12,8 @@ import '../widgets.dart';
 import '../cloudinary_service.dart';
 import '../image_helper.dart';
 import '../photo_viewer.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -28,6 +31,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _photoOverride; // nayi photo ('' = hata di gayi)
   bool _uploading = false;
   String? _nameOverride; // naya naam (nickname)
+  String? _usernameOverride;
+  DateTime? _usernameChangedOverride; // abhi badla to cooldown foran lag jaye
+  bool _savingUsername = false;
   bool _savingName = false;
 
   void _snack(String text) {
@@ -61,6 +67,226 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _snack('Could not remove photo. Try again.');
     } finally {
       if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  Future<void> _editUsername(String current, DateTime? changedAt) async {
+    if (_savingUsername) return;
+
+    // 7 din ka gap
+    if (changedAt != null) {
+      final allowedAt = changedAt.add(AuthRepository.usernameCooldown);
+      if (DateTime.now().isBefore(allowedAt)) {
+        _snack(UsernameCooldownException(allowedAt).toString());
+        return;
+      }
+    }
+
+    final c = TextEditingController(text: current);
+    String? error;
+    String status = 'idle'; // idle | checking | available | unavailable
+    Timer? debounce;
+    bool closed = false;
+
+    Widget statusWidget() {
+      switch (status) {
+        case 'checking':
+          return const Row(children: [
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(width: 8),
+            Text('Checking...'),
+          ]);
+        case 'available':
+          return const Row(children: [
+            Icon(Icons.check_circle, size: 16, color: Colors.green),
+            SizedBox(width: 6),
+            Text('Available',
+                style: TextStyle(
+                    color: Colors.green, fontWeight: FontWeight.w700)),
+          ]);
+        case 'unavailable':
+          return const Row(children: [
+            Icon(Icons.cancel, size: 16, color: Colors.red),
+            SizedBox(width: 6),
+            Text('Unavailable',
+                style:
+                TextStyle(color: Colors.red, fontWeight: FontWeight.w700)),
+          ]);
+        default:
+          return const Text('6-20 characters: small letters, numbers, _ and .');
+      }
+    }
+
+    void onChanged(String raw, StateSetter setD) {
+      debounce?.cancel();
+      final v = raw.trim().toLowerCase();
+      error = null;
+      // apna hi username ya abhi adhoora/ghalat format: check nahi karna
+      if (v == current || validateUsername(v) != null) {
+        setD(() => status = 'idle');
+        return;
+      }
+      setD(() => status = 'checking');
+      debounce = Timer(const Duration(milliseconds: 500), () async {
+        bool free;
+        try {
+          free = await authRepo.isUsernameAvailable(v);
+        } catch (_) {
+          if (!closed) setD(() => status = 'idle');
+          return;
+        }
+        if (closed || c.text.trim().toLowerCase() != v) return;
+        setD(() => status = free ? 'available' : 'unavailable');
+      });
+    }
+
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) => AlertDialog(
+          backgroundColor: AppColors.cream,
+          title: const Text(
+            'Change username',
+            style: TextStyle(
+              color: AppColors.brown900,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: c,
+                autofocus: true,
+                maxLength: 20,
+                onChanged: (t) => onChanged(t, setD),
+                inputFormatters: [
+                  TextInputFormatter.withFunction(
+                        (oldValue, newValue) =>
+                        newValue.copyWith(text: newValue.text.toLowerCase()),
+                  ),
+                  FilteringTextInputFormatter.allow(RegExp(r'[a-z0-9_.]')),
+                  LengthLimitingTextInputFormatter(20),
+                ],
+                decoration: InputDecoration(
+                  prefixText: '@',
+                  errorText: error,
+                  helper: statusWidget(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'You can change your username only once every 7 days.',
+                style: TextStyle(fontSize: 12.5, color: AppColors.brown700),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                closed = true;
+                debounce?.cancel();
+                Navigator.pop(ctx);
+              },
+              child: const Text('Cancel',
+                  style: TextStyle(color: AppColors.brown700)),
+            ),
+            TextButton(
+              onPressed: () async {
+                final v = c.text.trim().toLowerCase();
+                final err = validateUsername(v) ??
+                    (v == current ? 'This is already your username' : null);
+                if (err != null) {
+                  setD(() => error = err);
+                  return;
+                }
+                // abhi tak check nahi hua (ya jaldi dabaya) to pehle check
+                if (status != 'available') {
+                  debounce?.cancel();
+                  setD(() => status = 'checking');
+                  bool free;
+                  try {
+                    free = await authRepo.isUsernameAvailable(v);
+                  } catch (_) {
+                    free = true; // aakhri faisla transaction karega
+                  }
+                  if (closed) return;
+                  if (!free) {
+                    setD(() => status = 'unavailable');
+                    return;
+                  }
+                }
+                closed = true;
+                debounce?.cancel();
+                if (ctx.mounted) Navigator.pop(ctx, v);
+              },
+              child: const Text('Next',
+                  style: TextStyle(
+                      color: AppColors.gold700, fontWeight: FontWeight.w800)),
+            ),
+          ],
+        ),
+      ),
+    );
+    closed = true;
+    debounce?.cancel();
+    if (newName == null || !mounted) return;
+
+    // strict rule hai, isliye ek baar confirm
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cream,
+        title: Text(
+          'Change to @$newName?',
+          style: const TextStyle(
+            color: AppColors.brown900,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: const Text(
+          'You will not be able to change your username again for 7 days. '
+              'Your old username becomes available to other people.',
+          style: TextStyle(color: AppColors.brown700),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.brown700)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Change',
+                style: TextStyle(
+                    color: AppColors.gold700, fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _savingUsername = true);
+    try {
+      await authRepo.changeUsername(newName);
+      chatRepo.patchCachedUser(_uid, {'username': newName});
+      if (mounted) {
+        setState(() {
+          _usernameOverride = newName;
+          _usernameChangedOverride = DateTime.now();
+        });
+      }
+      _snack('Username updated.');
+    } catch (e) {
+      debugPrint('USERNAME ERROR: $e');
+      _snack(authErrorMessage(e));
+    } finally {
+      if (mounted) setState(() => _savingUsername = false);
     }
   }
 
@@ -289,7 +515,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 final loading =
                     snap.connectionState != ConnectionState.done &&
                         data == null;
-                final username = (data?['username'] as String?) ?? '';
+                final username =
+                    _usernameOverride ?? ((data?['username'] as String?) ?? '');
+                final usernameChangedAt = _usernameChangedOverride ??
+                    (data?['usernameChangedAt'] as Timestamp?)?.toDate();
                 final name =
                     _nameOverride ?? ((data?['name'] as String?) ?? '');
                 final photo =
@@ -408,6 +637,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             icon: Icons.alternate_email,
                             label: 'Username',
                             value: username.isEmpty ? '-' : username,
+                            onEdit: loading
+                                ? null
+                                : () => _editUsername(username, usernameChangedAt),
                           ),
                           _divider(),
                           _InfoRow(

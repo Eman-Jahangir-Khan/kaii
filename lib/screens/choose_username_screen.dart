@@ -35,19 +35,6 @@ class _ChooseUsernameScreenState extends State<ChooseUsernameScreen> {
     super.dispose();
   }
 
-  String? _validateUsername(String? value) {
-    final name = value?.trim() ?? '';
-    if (name.isEmpty) return 'Username is required';
-    if (name.length < 6) return 'At least 6 characters';
-    if (name.startsWith('.') || name.endsWith('.')) {
-      return 'Username cannot start or end with a dot';
-    }
-    if (name.contains('..')) {
-      return 'Username cannot have two dots in a row';
-    }
-    return null;
-  }
-
   void _showMessage(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -62,7 +49,7 @@ class _ChooseUsernameScreenState extends State<ChooseUsernameScreen> {
       final username = _username.text.trim().toLowerCase();
 
       if (!await authRepo.isUsernameAvailable(username)) {
-        _showMessage('This username is already taken.');
+        _showMessage('Username unavailable.');
         return;
       }
       // profile ban jate hi AuthGate khud Home dikha dega
@@ -103,7 +90,7 @@ class _ChooseUsernameScreenState extends State<ChooseUsernameScreen> {
                   FilteringTextInputFormatter.allow(RegExp(r'[a-z0-9_.]')),
                   LengthLimitingTextInputFormatter(20),
                 ],
-                validator: _validateUsername,
+                validator: validateUsername,
               ),
             ),
             const SizedBox(height: 28),

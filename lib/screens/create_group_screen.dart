@@ -174,7 +174,9 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
         final u = _contacts[i];
         final uid = u['uid'] as String;
         final username = (u['username'] as String?) ?? '';
-        final name = (u['name'] as String?) ?? '';
+        final name = ((u['name'] as String?) ?? '').trim();
+        // Title: naam (na ho to username), Subtitle: username
+        final title = name.isNotEmpty ? name : username;
         final on = _selected.contains(uid);
         return Container(
           decoration: BoxDecoration(
