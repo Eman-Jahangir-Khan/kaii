@@ -51,7 +51,9 @@ void showPhotoCard(
       required String photoUrl,
       required VoidCallback onMessage,
       VoidCallback? onInfo, // null ho to info icon nahi dikhta
-      bool showCall = true,
+      VoidCallback? onCall, // null ho to voice call icon nahi dikhta
+      VoidCallback? onVideoCall, // null ho to video call icon nahi dikhta
+      bool showCall = true, // purana parameter, ab use nahi hota (compile ke liye rakha hai)
     }) {
   final size = MediaQuery.of(context).size.width * 0.75;
 
@@ -145,17 +147,24 @@ void showPhotoCard(
                         onMessage();
                       },
                     ),
-                    if (showCall)
+                    if (onCall != null)
                       IconButton(
-                        tooltip: 'Call',
+                        tooltip: 'Voice call',
                         icon: const Icon(Icons.call_outlined,
                             color: AppColors.gold700),
                         onPressed: () {
                           Navigator.pop(ctx);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('Calls are coming soon')),
-                          );
+                          onCall();
+                        },
+                      ),
+                    if (onVideoCall != null)
+                      IconButton(
+                        tooltip: 'Video call',
+                        icon: const Icon(Icons.videocam_outlined,
+                            color: AppColors.gold700),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          onVideoCall();
                         },
                       ),
                     if (onInfo != null)

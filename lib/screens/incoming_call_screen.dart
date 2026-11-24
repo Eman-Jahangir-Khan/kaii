@@ -51,7 +51,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     if (route.isCurrent) {
       Navigator.of(context).pop();
     } else {
-      // upar koi aur screen (CallScreen) ho to usay mat chhedo, sirf apna route hatao
       Navigator.of(context).removeRoute(route);
     }
   }

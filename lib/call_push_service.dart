@@ -5,11 +5,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 
+import 'app_keys.dart';
 import 'call_repository.dart';
+import 'call_session.dart';
 import 'screens/call_screen.dart';
 
-/// MaterialApp mein navigatorKey: rootNavigatorKey lagana zaroori hai
-final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+export 'app_keys.dart' show rootNavigatorKey;
 
 /// Server se aane wale call push ko handle karo.
 /// Ye background isolate se bhi chalta hai (app band ho tab bhi).
@@ -70,6 +71,36 @@ class CallPushService {
     if (_started) return;
     _started = true;
 
+    // 1) Pehle listener lagao, taake Accept / Decline ka event miss na ho
+    _sub = FlutterCallkitIncoming.onEvent.listen((CallEvent? event) {
+      if (event is CallEventActionCallAccept) {
+        debugPrint('CALLKIT event: accept');
+        _onAccept(event.callKitParams);
+      } else if (event is CallEventActionCallDecline) {
+        debugPrint('CALLKIT event: decline');
+        final id = _callIdOf(event.callKitParams);
+        if (id.isNotEmpty) callRepo.decline(id).catchError((_) {});
+      }
+    });
+
+    // 2) App band thi aur Accept dabane se khuli: event miss ho gaya ho to yahan se pakdo
+    try {
+      final calls = await FlutterCallkitIncoming.activeCalls();
+      debugPrint('CALLKIT activeCalls: ${calls.length}');
+      for (final c in calls) {
+        if (c.isAccepted) _onAccept(c);
+      }
+    } catch (e) {
+      debugPrint('CALLKIT activeCalls error: $e');
+    }
+
+    // 3) Permissions sab se baad mein, call ke raste mein na aayein
+    _askPermissionsLater();
+  }
+
+  Future<void> _askPermissionsLater() async {
+    await Future.delayed(const Duration(seconds: 4));
+    if (callRepo.activeCallId != null || callSession.active) return;
     try {
       await FlutterCallkitIncoming.requestNotificationPermission({
         'title': 'Notification permission',
@@ -82,24 +113,17 @@ class CallPushService {
     } catch (e) {
       debugPrint('CALLKIT permission error: $e');
     }
+  }
 
-    _sub = FlutterCallkitIncoming.onEvent.listen((CallEvent? event) {
-      if (event is CallEventActionCallAccept) {
-        _onAccept(event.callKitParams);
-      } else if (event is CallEventActionCallDecline) {
-        final id = _callIdOf(event.callKitParams);
-        if (id.isNotEmpty) callRepo.decline(id).catchError((_) {});
-      }
-    });
-
-    // App band thi aur Accept dabane se khuli: event miss ho gaya ho to yahan se pakdo
+  /// Ye call callkit ne pehle hi sambhal li hai (ring ya Accept)?
+  /// To in-app incoming screen dobara na khole.
+  Future<bool> isHandledByCallkit(String id) async {
+    if (_handled.contains(id)) return true;
     try {
       final calls = await FlutterCallkitIncoming.activeCalls();
-      for (final c in calls) {
-        if (c.isAccepted) _onAccept(c);
-      }
-    } catch (e) {
-      debugPrint('CALLKIT activeCalls error: $e');
+      return calls.any((c) => _callIdOf(c) == id);
+    } catch (_) {
+      return false;
     }
   }
 
@@ -111,6 +135,7 @@ class CallPushService {
     final extra = p.extra ?? <String, dynamic>{};
     if (id.isEmpty || _handled.contains(id)) return;
     _handled.add(id);
+    debugPrint('CALLKIT accept: $id');
 
     // Home screen ka listener dobara incoming screen na khole
     callRepo.activeCallId = id;
@@ -118,6 +143,7 @@ class CallPushService {
     // Cold start: login (auth) restore hone ka intezar
     final user = await FirebaseAuth.instance.authStateChanges().first;
     if (user == null) {
+      debugPrint('CALLKIT accept: user logged in nahi');
       callRepo.activeCallId = null;
       return;
     }
@@ -130,16 +156,18 @@ class CallPushService {
       return;
     }
 
-    // Navigator tayyar hone ka intezar (max 5 second)
-    for (var i = 0; i < 25 && rootNavigatorKey.currentState == null; i++) {
+    // Navigator tayyar hone ka intezar (max 15 second)
+    for (var i = 0; i < 75 && rootNavigatorKey.currentState == null; i++) {
       await Future.delayed(const Duration(milliseconds: 200));
     }
     final nav = rootNavigatorKey.currentState;
     if (nav == null) {
+      debugPrint('CALLKIT accept: navigator nahi mila');
       callRepo.activeCallId = null;
       return;
     }
 
+    debugPrint('CALLKIT accept: call screen khol raha hu');
     nav.push(
       MaterialPageRoute(
         builder: (_) => CallScreen(

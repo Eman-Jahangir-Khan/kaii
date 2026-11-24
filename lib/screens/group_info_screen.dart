@@ -11,6 +11,7 @@ import '../cloudinary_service.dart';
 import '../group_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../photo_viewer.dart';
 import '../image_helper.dart';
 
 /// Pop result: true = main ne group chhod diya (chat screen bhi band ho jaye)
@@ -401,16 +402,30 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
               padding: const EdgeInsets.fromLTRB(16, 20, 16, 24),
               children: [
                 Center(
-                  child: GestureDetector(
-                    onTap: _amAdmin && !_busy ? _changePhoto : null,
-                    child: Stack(
-                      children: [
-                        UserAvatar(
+                  child: Stack(
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          if (photo.isNotEmpty) {
+                            openFullPhoto(
+                              context,
+                              title: name,
+                              photoUrl: photo,
+                            );
+                          } else if (_amAdmin && !_busy) {
+                            _changePhoto();
+                          }
+                        },
+                        child: UserAvatar(
                             username: name, photoUrl: photo, size: 96),
-                        if (_amAdmin)
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
+                      ),
+                      if (_amAdmin)
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: _busy ? null : _changePhoto,
                             child: Container(
                               padding: const EdgeInsets.all(6),
                               decoration: const BoxDecoration(
@@ -421,8 +436,8 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
                                   size: 16, color: AppColors.cream),
                             ),
                           ),
-                      ],
-                    ),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 14),

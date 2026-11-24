@@ -94,4 +94,34 @@ class CallRepository {
     'status': 'ended',
     'endedAt': FieldValue.serverTimestamp(),
   });
+
+  /// Call khatam hone par chat mein uska log likho (sirf caller likhta hai).
+  /// Message ki id = call id, is liye ek call ka log do baar nahi banta.
+  Future<void> logToChat(String callId, {int seconds = 0}) async {
+    final snap = await _calls.doc(callId).get();
+    final d = snap.data();
+    if (d == null) return;
+
+    final status = (d['status'] as String?) ?? '';
+    if (!['ended', 'declined', 'cancelled', 'missed'].contains(status)) return;
+
+    final chatId = chatRepo.chatIdWith(d['calleeId'] as String);
+    await _db
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .doc(callId)
+        .set({
+      'type': 'system',
+      'systemKind': 'call',
+      'senderId': _uid,
+      'text': '',
+      'callType': d['type'], // 'voice' ya 'video'
+      'callStatus': status,
+      'callerId': d['callerId'],
+      'duration': status == 'ended' ? seconds : 0,
+      'createdAt': FieldValue.serverTimestamp(),
+      'readAt': null,
+    });
+  }
 }

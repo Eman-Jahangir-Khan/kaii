@@ -1731,7 +1731,17 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             if (showDate) _DateChip(label: _dayLabel(created)),
             if (doc.id == _firstUnreadId) _UnreadBanner(count: _unreadCount),
-            if (m['type'] == 'system')
+            if (m['type'] == 'system' && m['systemKind'] == 'call')
+              _CallLogRow(
+                data: m,
+                myUid: _myUid,
+                time: created,
+                // patti par tap se wahi call dobara (block ho to nahi)
+                onTap: (_blockedByMe || _blockedByOther)
+                    ? null
+                    : () => _startCall(m['callType'] == 'video'),
+              )
+            else if (m['type'] == 'system')
               _DateChip(label: _systemLabel(m))
             else
               KeyedSubtree(
@@ -2601,6 +2611,112 @@ class _DateChip extends StatelessWidget {
             fontSize: 12,
             fontWeight: FontWeight.w700,
             color: AppColors.brown700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Chat ke andar call ka log (WhatsApp jaisa)
+class _CallLogRow extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final String myUid;
+  final DateTime? time;
+  final VoidCallback? onTap;
+
+  const _CallLogRow({
+    required this.data,
+    required this.myUid,
+    required this.time,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final video = data['callType'] == 'video';
+    final status = (data['callStatus'] as String?) ?? '';
+    final outgoing = data['callerId'] == myUid;
+    final secs = (data['duration'] as num?)?.toInt() ?? 0;
+    final name = video ? 'Video call' : 'Voice call';
+    final lower = name.toLowerCase();
+
+    final answered = status == 'ended' && secs > 0;
+    // samne wale ke liye: na uthayi hui ya caller ne cut ki hui call = missed
+    final missed = !outgoing && (status == 'missed' || status == 'cancelled');
+
+    final String title;
+    if (answered) {
+      title = name;
+    } else if (status == 'declined') {
+      title = outgoing ? 'Call declined' : 'Declined $lower';
+    } else if (missed) {
+      title = 'Missed $lower';
+    } else if (status == 'missed') {
+      title = 'No answer';
+    } else if (status == 'cancelled') {
+      title = 'Cancelled $lower';
+    } else {
+      title = name;
+    }
+
+    final arrow = missed
+        ? Icons.call_missed
+        : (outgoing ? Icons.call_made : Icons.call_received);
+    final color = missed ? Colors.red : AppColors.brown700;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Material(
+          color: AppColors.gold500.withValues(alpha: 0.2),
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    video ? Icons.videocam_rounded : Icons.call_rounded,
+                    size: 20,
+                    color: color,
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(arrow, size: 14, color: color),
+                          const SizedBox(width: 4),
+                          Text(
+                            title,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: missed ? Colors.red : AppColors.brown900,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        answered
+                            ? '${_fmtDuration(secs)}  ·  ${_hhmm(time)}'
+                            : _hhmm(time),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.brown700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

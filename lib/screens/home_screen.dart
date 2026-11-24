@@ -18,6 +18,7 @@ import '../photo_viewer.dart';
 import 'contact_screen.dart';
 import '../call_repository.dart';
 import 'incoming_call_screen.dart';
+import 'call_screen.dart';
 import '../call_push_service.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -54,7 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
     chatRepo.startContactNames();
     presenceService.start();
     CallPushService.instance.init();
-    _callSub = callRepo.incomingCalls().listen((snap) {
+    _callSub = callRepo.incomingCalls().listen((snap) async {
       // App background mein ho to poori screen wali ring (callkit) dikhegi,
       // yahan dobara screen na kholo
       if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
@@ -66,6 +67,10 @@ class _HomeScreenState extends State<HomeScreen> {
         if (t == null) continue;
         if (DateTime.now().difference(t).inSeconds > 60) continue; // purani call
         if (callRepo.activeCallId == d.id) continue;
+        // Callkit ne ye call pehle hi sambhal li hai (ring ya Accept): in-app screen nahi
+        if (await CallPushService.instance.isHandledByCallkit(d.id)) continue;
+        if (!mounted) return;
+        if (callRepo.activeCallId == d.id) continue; // await ke dauran badal sakta hai
         if (callRepo.activeCallId != null) {
           callRepo.decline(d.id).catchError((_) {}); // pehle se call mein hain
           continue;
@@ -814,6 +819,9 @@ class _ChatTileState extends State<_ChatTile> {
               : '...',
         );
         final photo = (user?['photoUrl'] as String?) ?? '';
+        // Block hua ho (kisi bhi taraf se) to call icons nahi dikhenge
+        final canCall = !(widget.data['blockedBy'] is List &&
+            (widget.data['blockedBy'] as List).isNotEmpty);
 
         return Container(
           decoration: BoxDecoration(
@@ -862,6 +870,24 @@ class _ChatTileState extends State<_ChatTile> {
                                 ),
                               ),
                             ),
+                            onCall: canCall
+                                ? () => placeCall(
+                              context,
+                              otherUid: _otherUid,
+                              otherName: username,
+                              otherPhoto: photo,
+                              video: false,
+                            )
+                                : null,
+                            onVideoCall: canCall
+                                ? () => placeCall(
+                              context,
+                              otherUid: _otherUid,
+                              otherName: username,
+                              otherPhoto: photo,
+                              video: true,
+                            )
+                                : null,
                             onInfo: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => ContactScreen(
