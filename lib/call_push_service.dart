@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
@@ -24,15 +25,55 @@ Future<void> handleCallPush(Map<String, dynamic> data) async {
   }
 }
 
+/// Caller ka naam mere liye: mera save kiya naam > uska apna naam > username.
+/// Background isolate mein bhi chalta hai, isliye seedha Firestore se padhta hai.
+/// Der lage ya error aaye to fallback (call ke document wala naam) hi use hota hai.
+Future<String> resolveCallerName({
+  required String callerId,
+  required String fallback,
+}) async {
+  try {
+    if (callerId.isEmpty) return fallback;
+    final auth = FirebaseAuth.instance;
+    final user = auth.currentUser ??
+        await auth
+            .authStateChanges()
+            .first
+            .timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
+    if (user == null) return fallback;
+
+    final db = FirebaseFirestore.instance;
+    final results = await Future.wait([
+      db.collection('users').doc(user.uid).collection('contacts').doc(callerId).get(),
+      db.collection('users').doc(callerId).get(),
+    ]).timeout(const Duration(seconds: 2));
+
+    final saved = ((results[0].data()?['name'] as String?) ?? '').trim();
+    if (saved.isNotEmpty) return saved;
+    final nick = ((results[1].data()?['name'] as String?) ?? '').trim();
+    if (nick.isNotEmpty) return nick;
+    final un = ((results[1].data()?['username'] as String?) ?? '').trim();
+    return un.isNotEmpty ? un : fallback;
+  } catch (e) {
+    debugPrint('CALLKIT name error: $e');
+    return fallback;
+  }
+}
+
 Future<void> _showIncoming(Map<String, dynamic> d) async {
   final callId = (d['callId'] ?? '').toString();
   if (callId.isEmpty) return;
   final video = d['callType'] == 'video';
   final photo = (d['callerPhoto'] ?? '').toString();
+  final callerId = (d['callerId'] ?? '').toString();
+  final name = await resolveCallerName(
+    callerId: callerId,
+    fallback: (d['callerName'] ?? 'Kaii').toString(),
+  );
 
   final params = CallKitParams(
     id: callId,
-    nameCaller: (d['callerName'] ?? 'Kaii').toString(),
+    nameCaller: name,
     appName: 'Kaii',
     avatar: photo.isEmpty ? null : photo,
     handle: video ? 'Video call' : 'Voice call',
@@ -40,7 +81,8 @@ Future<void> _showIncoming(Map<String, dynamic> d) async {
     duration: 40000,
     extra: <String, dynamic>{
       'callId': callId,
-      'callerName': (d['callerName'] ?? '').toString(),
+      'callerId': callerId,
+      'callerName': name,
       'callerPhoto': photo,
       'callType': video ? 'video' : 'voice',
     },
@@ -167,12 +209,17 @@ class CallPushService {
       return;
     }
 
+    final shownName = await resolveCallerName(
+      callerId: (extra['callerId'] ?? '').toString(),
+      fallback: (extra['callerName'] ?? '').toString(),
+    );
+
     debugPrint('CALLKIT accept: call screen khol raha hu');
     nav.push(
       MaterialPageRoute(
         builder: (_) => CallScreen(
           callId: id,
-          otherName: (extra['callerName'] ?? '').toString(),
+          otherName: shownName,
           otherPhoto: (extra['callerPhoto'] ?? '').toString(),
           video: extra['callType'] == 'video',
           isCaller: false,

@@ -18,6 +18,12 @@ class CallRepository {
   /// Jis call par abhi screen khuli hai (taake incoming screen dobara na khule)
   String? activeCallId;
 
+  String _nonEmpty(String? a, String? b) {
+    final x = (a ?? '').trim();
+    if (x.isNotEmpty) return x;
+    return (b ?? '').trim();
+  }
+
   /// Naya call shuru karo, call id wapis deta hai
   Future<String> startCall({
     required String otherUid,
@@ -31,7 +37,8 @@ class CallRepository {
       'callerId': _uid,
       'calleeId': otherUid,
       'participants': [_uid, otherUid],
-      'callerName': (me?['username'] as String?) ?? '',
+      // Caller ka apna naam (nickname) agar hai, warna username
+      'callerName': _nonEmpty(me?['name'] as String?, me?['username'] as String?),
       'callerPhoto': (me?['photoUrl'] as String?) ?? '',
       'calleeName': otherName,
       'calleePhoto': otherPhoto,

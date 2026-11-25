@@ -422,19 +422,27 @@ class _UserBuilderState extends State<_UserBuilder> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>?>(
-      key: ValueKey(widget.uid),
-      future: _future,
-      initialData: chatRepo.cachedUser(widget.uid),
-      builder: (context, snap) {
-        final user = snap.data;
-        final username = (user?['username'] as String?) ??
-            (snap.connectionState == ConnectionState.done
-                ? 'Unknown user'
-                : '...');
-        final photo = (user?['photoUrl'] as String?) ?? '';
-        return widget.builder(context, username, photo);
-      },
+    // saved naam badle to list khud update ho jaye
+    return ValueListenableBuilder<Map<String, String>>(
+      valueListenable: chatRepo.contactNames,
+      builder: (context, names, _) => FutureBuilder<Map<String, dynamic>?>(
+        key: ValueKey(widget.uid),
+        future: _future,
+        initialData: chatRepo.cachedUser(widget.uid),
+        builder: (context, snap) {
+          final user = snap.data;
+          final done = snap.connectionState == ConnectionState.done;
+
+          // Mera save kiya naam > nickname > username
+          var name = user == null
+              ? (done ? 'Unknown user' : '...')
+              : chatRepo.displayName(widget.uid, user);
+          if (name.trim().isEmpty) name = done ? 'Unknown user' : '...';
+
+          final photo = (user?['photoUrl'] as String?) ?? '';
+          return widget.builder(context, name, photo);
+        },
+      ),
     );
   }
 }

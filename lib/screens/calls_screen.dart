@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../call_repository.dart';
+import '../chat_repository.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'call_screen.dart';
@@ -216,16 +217,40 @@ class _CallTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final outgoing = data['callerId'] == myUid;
+    final otherUid = (outgoing ? data['calleeId'] : data['callerId']) as String;
+    // Call banne ke waqt ka naam / photo (sirf aakhri fallback ke liye)
+    final storedName =
+        ((outgoing ? data['calleeName'] : data['callerName']) as String?) ?? '';
+    final storedPhoto =
+        ((outgoing ? data['calleePhoto'] : data['callerPhoto']) as String?) ??
+            '';
+
+    // Naam ki tarteeb: mera save kiya naam > us ka apna naam (nickname) > username
+    // (chatRepo.displayName wahi logic hai jo home aur chat screen mein hai)
+    return ValueListenableBuilder<Map<String, String>>(
+      valueListenable: chatRepo.contactNames,
+      builder: (context, _, __) {
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: chatRepo.userStream(otherUid),
+          builder: (context, snap) {
+            final user = snap.data?.data() ?? chatRepo.cachedUser(otherUid);
+            final name =
+            chatRepo.displayName(otherUid, user, fallback: storedName);
+            final livePhoto = (user?['photoUrl'] as String?) ?? '';
+            final photo = livePhoto.isNotEmpty ? livePhoto : storedPhoto;
+            return _content(context, otherUid, name, photo);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _content(
+      BuildContext context, String otherUid, String name, String photo) {
+    final outgoing = data['callerId'] == myUid;
     final status = (data['status'] as String?) ?? '';
     final video = data['type'] == 'video';
     final missed = !outgoing && (status == 'missed' || status == 'cancelled');
-
-    final otherUid = (outgoing ? data['calleeId'] : data['callerId']) as String;
-    final name =
-        ((outgoing ? data['calleeName'] : data['callerName']) as String?) ?? '';
-    final photo =
-        ((outgoing ? data['calleePhoto'] : data['callerPhoto']) as String?) ??
-            '';
 
     final created = (data['createdAt'] as Timestamp?)?.toDate();
     final answered = (data['answeredAt'] as Timestamp?)?.toDate();

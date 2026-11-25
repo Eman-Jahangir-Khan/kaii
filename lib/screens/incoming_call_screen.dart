@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../call_repository.dart';
+import '../../chat_repository.dart';
 import '../../theme.dart';
 import '../../widgets.dart';
 import 'call_screen.dart';
@@ -28,14 +29,42 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   bool _accepted = false;
   bool _closing = false;
 
-  String get _name => (widget.data['callerName'] as String?) ?? '';
-  String get _photo => (widget.data['callerPhoto'] as String?) ?? '';
+  Map<String, dynamic>? _user; // caller ka profile (nickname / photo ke liye)
+
+  String get _callerId => (widget.data['callerId'] as String?) ?? '';
+
+  /// Naam ki tarteeb: mera save kiya naam > caller ka apna naam > username
+  String get _name => chatRepo.displayName(
+    _callerId,
+    _user ?? chatRepo.cachedUser(_callerId),
+    fallback: (widget.data['callerName'] as String?) ?? '',
+  );
+
+  String get _photo {
+    final live =
+        ((_user ?? chatRepo.cachedUser(_callerId))?['photoUrl'] as String?) ??
+            '';
+    return live.isNotEmpty
+        ? live
+        : (widget.data['callerPhoto'] as String?) ?? '';
+  }
+
   bool get _video => widget.data['type'] == 'video';
+
+  void _onNames() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
     callRepo.activeCallId = widget.callId;
+    chatRepo.contactNames.addListener(_onNames);
+    if (_callerId.isNotEmpty) {
+      chatRepo.getUser(_callerId).then((u) {
+        if (mounted) setState(() => _user = u);
+      }).catchError((_) {});
+    }
     // Caller ne cut kar di ya time out ho gaya to screen band
     _sub = callRepo.callStream(widget.callId).listen((doc) {
       final s = doc.data()?['status'];
@@ -89,6 +118,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   @override
   void dispose() {
+    chatRepo.contactNames.removeListener(_onNames);
     _sub?.cancel();
     if (!_accepted) callRepo.activeCallId = null;
     super.dispose();
